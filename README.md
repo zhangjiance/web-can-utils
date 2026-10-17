@@ -1,8 +1,12 @@
 # Web CAN Utils
 
+English | [简体中文](README.zh-CN.md)
+
 A browser-based CAN/CAN FD monitor and transmitter. It talks to GS_USB /
 Candlelight-compatible adapters directly through WebUSB, with no driver or
 native application required.
+
+**Live demo:** <https://zhangjiance.github.io/web-can-utils/>
 
 ## Features
 
