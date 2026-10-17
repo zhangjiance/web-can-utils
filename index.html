@@ -1,0 +1,1637 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Web CAN Utils</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: rgba(18, 28, 47, 0.78);
+      --ink: #ecf2ff;
+      --ink-soft: #a8b7d3;
+      --line: rgba(143, 170, 217, 0.28);
+      --accent: #36c2ff;
+      --accent-2: #20d9a2;
+      /* colour of a value that just changed: deliberately not the accent, so a
+       * flash is obvious against the rest of the (blue) interface */
+      --flash: #ffc978;                    /* light orange: a red reads as an error */
+      --flash-glow: rgba(255, 201, 120, 0.45);
+      /* native widgets (select popups, scrollbars) follow the theme */
+      color-scheme: dark;
+      --danger: #ff5d86;
+      --ok: #38d39f;
+      --shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow-x: hidden;
+      font-family: "Space Grotesk", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 10%, rgba(54, 194, 255, 0.22), transparent 42%),
+        radial-gradient(circle at 88% 14%, rgba(32, 217, 162, 0.18), transparent 35%),
+        radial-gradient(circle at 70% 80%, rgba(73, 76, 255, 0.16), transparent 40%),
+        linear-gradient(160deg, #0a1020, #0c1730 48%, #0a1327);
+      padding: 10px;
+    }
+
+    body[data-theme="light"] {
+      --panel: rgba(255, 255, 255, 0.92);
+      --ink: #1f2937;
+      --ink-soft: #6b7280;
+      --line: #d1d5db;
+      --accent: #2563eb;
+      --accent-2: #10b981;
+      --flash: #e8871e;
+      --flash-glow: rgba(232, 135, 30, 0.3);
+      color-scheme: light;
+      --danger: #dc2626;
+      --ok: #059669;
+      --shadow: 0 12px 30px rgba(37, 99, 235, 0.14);
+      background: linear-gradient(135deg, #98d5fa 0%, #baddf5 50%, #75c0f2 100%);
+    }
+
+    .wrap {
+      width: min(1380px, calc(100vw - 20px));
+      min-height: calc(100vh - 20px);
+      height: calc(100vh - 20px);
+      margin: 0 auto;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 6px;
+      animation: rise .45s ease-out;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    #theme-switcher {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      background: var(--panel);
+      border-radius: 24px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      z-index: 6;
+    }
+
+    .theme-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    .theme-btn:hover {
+      transform: scale(1.05);
+    }
+
+    .theme-btn.active {
+      border-color: var(--accent);
+    }
+
+    .theme-btn[data-theme="light"] {
+      background: linear-gradient(135deg, #b8ddf5 0%, #ecc9dd 100%);
+    }
+
+    .theme-btn[data-theme="dark"] {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+
+    .hero {
+      border: 1px solid var(--line);
+      background: linear-gradient(120deg, rgba(15, 33, 67, 0.82), rgba(17, 50, 88, 0.74));
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 4px 6px;
+      min-height: 0;
+      position: relative;
+      overflow: visible;
+      text-align: left;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: -45% auto auto -15%;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(54, 194, 255, 0.12), transparent 72%);
+      pointer-events: none;
+    }
+
+    body[data-theme="light"] .hero {
+      background: linear-gradient(135deg, rgba(37, 99, 235, 0.22), rgba(16, 185, 129, 0.18));
+      border-color: #d1d5db;
+    }
+
+    body[data-theme="light"] .hero::after {
+      background: radial-gradient(circle, rgba(37, 99, 235, 0.10), transparent 72%);
+    }
+
+    .titlebar {
+      width: 100%;
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 8px;
+      align-items: start;
+      padding-top: 2px;
+      padding-right: 0;
+    }
+
+    .brand-watermark {
+      position: static;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .04em;
+      text-decoration: none;
+      color: color-mix(in srgb, var(--accent) 68%, var(--accent-2));
+      border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+      border-radius: 999px;
+      padding: 5px 12px;
+      z-index: 4;
+      background: color-mix(in srgb, var(--accent) 12%, rgba(8, 18, 34, 0.75));
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent) inset,
+        0 8px 20px rgba(6, 17, 36, 0.32);
+      transition: transform .16s ease, box-shadow .16s ease, color .16s ease, border-color .16s ease;
+      justify-self: start;
+      align-self: start;
+    }
+
+    body[data-theme="light"] .brand-watermark {
+      color: color-mix(in srgb, var(--accent) 72%, #0f172a 28%);
+      border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, rgba(255, 255, 255, 0.96));
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.8) inset,
+        0 8px 18px rgba(24, 93, 208, 0.16);
+    }
+
+    body[data-theme="light"] .brand-watermark:hover {
+      color: color-mix(in srgb, var(--accent) 82%, #0f172a 18%);
+      border-color: color-mix(in srgb, var(--accent) 66%, transparent);
+      transform: translateY(-1px);
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.86) inset,
+        0 10px 22px rgba(24, 93, 208, 0.22);
+    }
+
+    body[data-theme="dark"] .brand-watermark:hover {
+      color: color-mix(in srgb, var(--accent) 74%, #eafff8 26%);
+      border-color: color-mix(in srgb, var(--accent) 64%, transparent);
+      transform: translateY(-1px);
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent) inset,
+        0 12px 24px rgba(6, 17, 36, 0.42);
+    }
+
+    .title-left {
+      position: static;
+      transform: none;
+      width: 100%;
+      text-align: center;
+      pointer-events: none;
+      grid-column: 2;
+      align-self: start;
+    }
+
+    .subtitle {
+      margin: 2px 0 0;
+      font-size: .72rem;
+      color: var(--ink-soft);
+      letter-spacing: .01em;
+      font-weight: 500;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1rem, 2.5vw, 1.5rem);
+      letter-spacing: .02em;
+      background: linear-gradient(90deg, #9ae6ff, #5bf5cb);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    body[data-theme="light"] h1 {
+      background: linear-gradient(90deg, #0284c7, #0d9488);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .action-row {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-left {
+      display: grid;
+      /* one auto column per toolbar button (Protocol + Device + Start/Stop +
+       * RST + ADD + CLR + DEBUG): keep this in sync when buttons are added,
+       * otherwise the extra one wraps onto a line of its own. */
+      grid-template-columns: minmax(180px, 1.6fr) repeat(6, auto);
+      align-items: stretch;
+      gap: 6px;
+      position: static;
+      z-index: 3;
+    }
+
+    .protocol-inline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px;
+      min-height: 30px;
+      background: rgba(10, 20, 38, 0.72);
+    }
+
+    .protocol-inline label {
+      font-size: .75rem;
+      color: var(--ink-soft);
+      white-space: nowrap;
+    }
+
+    .protocol-inline select {
+      width: 100%;
+      min-width: 0;
+      padding: 5px 8px;
+      font-size: .8rem;
+      background: #0f1b31;
+      color: #ecf2ff;
+      border: 1px solid var(--line);
+      color-scheme: dark;
+    }
+
+    .protocol-inline select option {
+      background: #0f1b31;
+      color: #ecf2ff;
+    }
+
+    body[data-theme="light"] .protocol-inline {
+      background: rgba(255, 255, 255, 0.96);
+      border-color: #d1d5db;
+    }
+
+    body[data-theme="light"] .protocol-inline select {
+      background: #ffffff;
+      color: #1f2937;
+      border-color: #d1d5db;
+      color-scheme: light;
+    }
+
+    body[data-theme="light"] .protocol-inline select option {
+      background: #ffffff;
+      color: #1f2937;
+    }
+
+    .toolbar-left .tool-icon {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .tool-icon {
+      min-width: 80px;
+      height: 30px;
+      border-radius: 8px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .75rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .status-footer {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 4px 6px;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+    }
+
+    #chipState {
+      display: inline-block;
+      max-width: 60vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 6px;
+      align-items: center;
+      width: 100%;
+      padding: 0;
+      overflow: auto;
+      justify-content: flex-start;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: 1fr 1fr;
+      gap: 10px;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .pane {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr);
+      gap: 8px;
+      align-items: stretch;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .pane-label {
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      transform: rotate(180deg);
+      letter-spacing: .12em;
+      font-size: .72rem;
+      font-weight: 700;
+      color: var(--ink-soft);
+      user-select: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(8, 18, 34, 0.42);
+    }
+
+    body[data-theme="light"] .pane-label {
+      color: #0f172a;
+      background: rgba(255, 255, 255, 0.9);
+      border-color: rgba(84, 156, 214, 0.62);
+      text-shadow: none;
+    }
+
+    /* DEBUG column: the host <-> device traffic, only while body.debug is set.
+     * The page grows to the right instead of squeezing the tables. */
+    /* The debug column is added beside the main column, it does not widen it:
+     * the tables keep the width they have without debug mode. */
+    body.debug .wrap {
+      width: min(1790px, calc(100vw - 20px));
+    }
+
+    body.debug .workspace {
+      grid-template-columns: minmax(0, 1240px) minmax(300px, 1fr);
+    }
+
+    .workspace > .pane:nth-of-type(1) { grid-column: 1; grid-row: 1; }
+    .workspace > .pane:nth-of-type(2) { grid-column: 1; grid-row: 2; }
+
+    #debugPane {
+      display: none;
+      grid-column: 2;
+      grid-row: 1 / span 2;
+      min-width: 0;
+    }
+
+    body.debug #debugPane { display: grid; }
+
+    .debug-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 6px;
+      font-size: .7rem;
+      color: var(--ink-soft);
+    }
+
+    .debug-head label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: .68rem;
+      color: var(--ink-soft);
+    }
+
+    .debug-log {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .66rem;
+      padding: 4px 6px;
+    }
+
+    .dbg-line {
+      display: flex;
+      gap: 6px;
+      padding: 1px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dbg-line:hover {
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+    }
+
+    .dbg-time {
+      flex: 0 0 auto;
+      color: var(--ink-soft);
+      min-width: 3.6em;
+      text-align: right;
+    }
+    .dbg-arrow { flex: 0 0 auto; color: var(--accent); }
+    .dbg-line.dbg-in .dbg-arrow { color: var(--accent-2); }
+    .dbg-label { flex: 0 0 auto; font-weight: 600; }
+    .dbg-detail {
+      flex: 1 1 auto;
+      min-width: 0;
+      color: var(--ink-soft);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .dbg-line.dbg-tx .dbg-label { color: var(--flash); }
+    .dbg-line.dbg-err .dbg-label { color: var(--danger); }
+
+    .pane-body {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 8px;
+      box-shadow: var(--shadow);
+      min-height: 0;
+      /* without this a long table cell drags the whole page wider */
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .table-wrap {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(7, 17, 34, 0.78);
+    }
+
+    body[data-theme="light"] .table-wrap {
+      background: rgba(255, 255, 255, 0.9);
+      border-color: rgba(84, 156, 214, 0.42);
+    }
+
+    .compact-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .68rem;
+    }
+
+    .compact-table th,
+    .compact-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 3px 4px;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .comment-cell {
+      max-width: 28ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .data-cell {
+      max-width: 96ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: normal;
+      word-break: break-all;
+    }
+
+    .compact-table th {
+      font-size: .62rem;
+      font-weight: 600;
+      color: var(--ink-soft);
+    }
+
+    .compact-table tr.selected {
+      background: rgba(54, 194, 255, 0.18);
+    }
+
+    /* Fallback for browsers without the Web Animations API (see flashToken):
+     * the class comes back off when the fade ends, so an unrelated repaint
+     * can never replay it. */
+    /* A changed value turns into a noticeable text colour and fades back to
+     * normal.  (A background flash on the whole cell reads as constant
+     * flickering, so only the text is animated.) */
+    .rx-byte {
+      display: inline-block;
+      padding: 0 1px;
+    }
+
+    @keyframes rxTextFlash {
+      from { color: var(--flash); text-shadow: 0 0 6px var(--flash-glow); }
+      to { color: inherit; text-shadow: none; }
+    }
+
+    .rx-byte.flash {
+      animation: rxTextFlash .9s ease-out both;
+    }
+
+    /* ESI is a state of the received frame, so it is shown steadily in the same
+     * colour a changed value flashes in (a flash would never settle if the bit
+     * flips every other frame). */
+    .esi-flag {
+      color: var(--flash);
+    }
+
+    /* count/length cells tick often: a shorter pulse reads better */
+    td.flash {
+      animation: rxTextFlash .5s ease-out both;
+    }
+
+    .compact-table td button {
+      font-size: .6rem;
+      padding: 2px 6px;
+      border-radius: 5px;
+      min-width: 0;
+    }
+
+    /* Inline quick-edit controls in the TRANSMIT list.  They are always there,
+     * they just look like quiet fields until pointed at. */
+    #txTaskBody input[data-edit] {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: inherit;
+      font: inherit;
+    }
+
+    /* A select's popup is painted with the select's own colours, so a
+     * translucent background left the options unreadable (light text on the
+     * near-white popup the browser fell back to). */
+    #txTaskBody select[data-edit] {
+      background: #0f1b31;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: #ecf2ff;
+      color-scheme: dark;
+      font: inherit;
+    }
+
+    #txTaskBody select[data-edit] option {
+      background: #0f1b31;
+      color: #ecf2ff;
+    }
+
+    #txTaskBody input[data-edit]:hover,
+    #txTaskBody select[data-edit]:hover {
+      border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    }
+
+    #txTaskBody input[data-edit]:focus {
+      outline: none;
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+    }
+
+    /* the select keeps a solid background while focused, for the same reason */
+    #txTaskBody select[data-edit]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    body[data-theme="light"] #txTaskBody input[data-edit] {
+      background: rgba(255, 255, 255, 0.92);
+    }
+
+    body[data-theme="light"] #txTaskBody select[data-edit] {
+      background: #ffffff;
+      color: #1f2937;
+      color-scheme: light;
+    }
+
+    body[data-theme="light"] #txTaskBody select[data-edit] option {
+      background: #ffffff;
+      color: #1f2937;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      padding: 2px 6px;
+      font-size: .68rem;
+      background: rgba(9, 21, 41, 0.72);
+      white-space: nowrap;
+      gap: 4px;
+    }
+
+    body[data-theme="light"] .status-footer .chip {
+      background: rgba(255, 255, 255, 0.96);
+      border-color: rgba(84, 156, 214, 0.62);
+    }
+
+    .status-label { color: var(--ink-soft); font-size: .65rem; }
+    .mono { font-family: "IBM Plex Mono", monospace; font-size: .68rem; }
+    .ok { color: var(--ok); }
+    .danger { color: var(--danger); }
+
+    body[data-theme="light"] .status-footer .status-label {
+      color: #334155;
+      font-weight: 600;
+    }
+
+    body[data-theme="light"] .status-footer .mono {
+      color: #0f172a;
+      font-weight: 600;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 10, 20, 0.42);
+      z-index: 40;
+      display: none;
+    }
+
+    .modal-backdrop.show { display: block; }
+
+    .popup-panel {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(960px, calc(100vw - 24px));
+      max-height: calc(100vh - 34px);
+      overflow: auto;
+      z-index: 50;
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 10px;
+    }
+
+    /* The TX panels: field layout and control sizes, used at every width.  These
+     * started as inline styles on every field (no media query can override those
+     * without !important), then became the phone layout - and the shape reads
+     * better than the old three column row on the desktop too, so it lives here
+     * and the phone only overrides the geometry (see the bottom sheet further
+     * down) and the touch sizing. */
+    #txModal .modal-head { margin-bottom: 4px; }
+    #txModal .modal-head h2 { margin: 0; font-size: 1rem; }
+    #txModal #btnCloseTxModal { width: 34px; height: 34px; font-size: 16px; }
+    /* Two columns per row: CAN ID | Data Len, Data (whole row), Cycle | Channel,
+     * Flags (whole row), Comment (whole row). */
+    #txModal .row,
+    #txDataModal .row {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-bottom: 5px;
+    }
+    #txModal .field { gap: 2px; }
+    /* The .field default (span 4) and the .wN classes are the 12 column desktop
+     * grid's spans; in this two column grid they have to go first - a `span 3`
+     * with only two columns invents a third, implicit column, which puts every
+     * field on a row of its own (the two column grid then never pairs anything).
+     * The id selector outranks `.field.w3` etc. */
+    #txModal .field,
+    #txDataModal .field { grid-column: auto; }
+    /* ... then the wide fields get the whole row back */
+    #txModal #dataField,
+    #txModal .field.w7:not(#dataField),
+    #txModal .field.w12,
+    #txDataModal .field.w12 {
+      grid-column: 1 / -1;
+    }
+    /* The two columns are true halves: every control fills its cell, so a pair
+     * adds up to exactly the row width - the same width the full-width rows
+     * (Data, Flags, Comment) use.  Capping the short selects (Data Len, Channel,
+     * Length) broke both: it made the pair unequal and made Comment, which spans
+     * the row, wider than the elements above it.
+     *
+     * min-width: 0 lets a grid item shrink below an input's intrinsic min-content
+     * width; without it a `size=20` input stretches its own column on a narrow
+     * screen and the halves drift apart again. */
+    #txModal .row > .field,
+    #txDataModal .row > .field { min-width: 0; }
+    #txModal .field > label,
+    #txDataModal .field > label { font-size: .74rem; }
+    /* :not() keeps the checkboxes on the generic input sizing */
+    #txModal input:not([type="checkbox"]),
+    #txModal select,
+    #txDataModal select { min-height: 34px; padding: 6px 9px; font-size: .85rem; }
+    #txModal .flags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      padding-top: 4px;
+    }
+    #txModal .flags label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: .8rem;
+      cursor: pointer;
+    }
+    #txModal input[type="checkbox"] { width: 20px; height: 20px; }
+    #txModal .data-line { gap: 4px; flex-wrap: wrap; align-items: flex-end; }
+    #txModal #btnMoreData { padding: 0 12px; font-size: .8rem; height: 32px; line-height: 1; }
+    /* The byte boxes are sized by app.js as an inline style, hence !important.
+     * The phone block overrides these again with bigger touch sizes. */
+    #txModal input[id^="data-byte"],
+    #txDataModal input[id^="full-byte"] {
+      width: 2.8em !important;
+      height: 32px !important;
+      padding: 5px 2px !important;
+      font-size: .85rem !important;
+    }
+    #txModal .modal-actions-right { margin-top: 4px; }
+    #txModal .modal-actions-right button { padding: 4px 14px; font-size: .78rem; }
+    #txDataModal #txDataBoxes { padding: 4px 0; }
+
+    .mini-modal { width: min(700px, calc(100vw - 24px)); }
+    /* the device panel carries a wide per-channel table; give it room and stop
+       grid children from spilling over their column */
+    /* The dialog is sized to what it holds, not to the screen.  The widest row
+     * is the device information as pills (~840px at .72rem); 920px keeps that on
+     * one line on a desktop, and the channel table - whose own content is only
+     * ~460px - gets the leftover as even column spacing (see the rule below). */
+    #connectModal { width: min(920px, calc(100vw - 24px)); }
+    /* Whatever slack is left goes to the last column (a short, left aligned
+     * text), so no leftover width can separate the timing controls from the
+     * state.  On a phone that column is display: none and drops out of the
+     * column sizing, which leaves the slack to the flexible timing select. */
+    #connectModal .compact-table th:last-child,
+    #connectModal .compact-table td:last-child { width: 100%; }
+    #connectModal .row > .field { min-width: 0; }
+
+    /*
+     * Column spacing.  The five nowrap columns add up to roughly 460px of
+     * content while the dialog is 760px wide (or `100vw - 24px`): that leftover
+     * has to go somewhere, and handing it to a column's width is what produced
+     * the old timing/state gap.  Adding it to every cell as horizontal padding
+     * instead keeps the columns in order, gives all of them room, and makes the
+     * table fill the dialog exactly - so nothing is left over to open a hole.
+     *
+     * The 505px is the columns' content (~460px) plus the dialog's own padding
+     * and border (22px) plus a margin, since an exact figure would start
+     * overflowing the moment a font renders a pixel wider; the /10 is two
+     * paddings across five columns.  The clamp only guards the extremes.
+     */
+    @media (min-width: 601px) {
+      #connectModal .compact-table th,
+      #connectModal .compact-table td {
+        padding: 3px clamp(4px, calc((min(920px, 100vw - 24px) - 505px) / 10), 48px);
+      }
+    }
+
+    /* Device information: one element per field, shown as small pills.  The
+     * block wraps between fields instead of breaking one in half ("S/N
+     * 4E1F2A3B…"), which is the normal case on a phone - and the reason the
+     * dialog can stay narrow.  A field itself never wraps. */
+    #deviceInfoPlaceholder {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px 4px;
+    }
+    #deviceInfoPlaceholder .dev-item {
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 1px 7px;
+      font-size: .72rem;
+      background: rgba(9, 21, 41, 0.55);
+    }
+    body[data-theme="light"] #deviceInfoPlaceholder .dev-item {
+      background: rgba(255, 255, 255, 0.9);
+    }
+    /* the per-channel timing select: same values the row builder used to set
+     * inline, so the desktop panel is unchanged */
+    #connectModal .compact-table select {
+      max-width: 100%;
+      padding: 3px 4px;
+      font-size: .72rem;
+    }
+    /* The channel table cannot shrink below the sum of its nowrap cells, so on a
+     * phone (and in a narrow desktop window) it is wider than the dialog.  It
+     * scrolls inside this box instead of dragging the whole dialog into a
+     * horizontal scroll - the dialog keeps its size and its buttons stay put.
+     * No border or background here, so the desktop dialog looks exactly as it
+     * did; the phone block gives it the frame the RX/TX tables have, which is
+     * also the hint that it can be swiped. */
+    #connectModal .channel-scroll {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      max-width: 100%;
+    }
+    .popup-panel.show { display: block; }
+
+    .modal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .close-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      padding: 0;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      grid-column: span 4;
+    }
+
+    .field.w4 { grid-column: span 4; }
+    .field.w5 { grid-column: span 5; }
+    .field.w6 { grid-column: span 6; }
+    .field.w7 { grid-column: span 7; }
+    .field.w3 { grid-column: span 3; }
+    .field.w2 { grid-column: span 2; }
+    .field.w8 { grid-column: span 8; }
+    .field.w12 { grid-column: span 12; }
+
+    .msg-type-wide { grid-column: span 9; }
+    .cycle-narrow { grid-column: span 3; }
+
+    label {
+      font-size: .8rem;
+      color: var(--ink-soft);
+    }
+
+    input, select, button, textarea {
+      font: inherit;
+      color: inherit;
+      border: 1px solid var(--line);
+      background: rgba(10, 20, 38, 0.72);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+
+    body[data-theme="light"] input,
+    body[data-theme="light"] select,
+    body[data-theme="light"] button,
+    body[data-theme="light"] textarea {
+      background: rgba(255, 255, 255, 0.96);
+      border-color: #d1d5db;
+      color: #1f2937;
+    }
+
+    /* A select's option popup is painted with the select's own colours, so it
+     * gets a solid background instead of the translucent one above. */
+    select {
+      background: #0f1b31;
+      color: var(--ink);
+    }
+
+    select option {
+      background: #0f1b31;
+      color: var(--ink);
+    }
+
+    body[data-theme="light"] select,
+    body[data-theme="light"] select option {
+      background: #ffffff;
+      color: #1f2937;
+    }
+
+    button {
+      cursor: pointer;
+      background: linear-gradient(150deg, rgba(22, 38, 68, 0.95), rgba(17, 27, 50, 0.95));
+      transition: border-color .12s ease, background-color .12s ease;
+      font-weight: 600;
+    }
+
+    button:hover {
+      border-color: rgba(112, 207, 255, 0.9);
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .data-line {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .data-line input { flex: 1; }
+
+    .modal-actions-right {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 920px) {
+      .wrap {
+        height: auto;
+        /* One viewport tall again, but only the workspace row is flexible now.
+         * The hero and the status bar keep their content height, so the leftover
+         * space cannot show up as blank space inside them any more - that is what
+         * the all-auto rows did when the whole grid was stretched (it read as
+         * padding under the buttons and around the status chips).
+         *
+         * dvh, not vh: on a phone the address bar makes vh taller than what is
+         * visible.  The vh line is the fallback for browsers without dvh. */
+        min-height: calc(100vh - 20px);
+        min-height: calc(100dvh - 20px);
+        align-content: start;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+      }
+      .field { grid-column: span 12; }
+      .hero {
+        min-height: 0;
+        padding-bottom: 6px;
+      }
+      /* RX and TX share the height the hero and the status bar leave over, so the
+       * panes are tall even when they are empty and their tables scroll once they
+       * are full - instead of the panes collapsing to a header row and leaving
+       * the lower half of the screen blank.  The 120px floor keeps a very short
+       * landscape window usable: the page scrolls there instead of squashing the
+       * tables away. */
+      .workspace {
+        grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr);
+      }
+      /* With DEBUG on the log takes a fixed share (a log wants a predictable
+       * height) and RX/TX share what is left. */
+      body.debug .workspace {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(120px, 1fr) minmax(120px, 1fr) minmax(100px, 26vh);
+      }
+      body.debug #debugPane { grid-column: 1; grid-row: 3; }
+      .titlebar {
+        grid-template-columns: 1fr;
+      }
+      .title-left {
+        grid-column: 1;
+        pointer-events: auto;
+        margin-bottom: 2px;
+      }
+      .brand-watermark {
+        grid-column: 1;
+        justify-self: start;
+      }
+      .action-row {
+        align-items: flex-start;
+      }
+      .toolbar-left {
+        position: static;
+        justify-content: flex-start;
+        /* 3 columns: the 6 buttons land on two full rows.  (2 columns left one
+         * cell over on the last row, which read as a gap under the buttons.) */
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 4px;
+        width: 100%;
+      }
+      /* the protocol picker is the only wide control: give it a row of its own */
+      .toolbar-left > .protocol-inline {
+        grid-column: 1 / -1;
+      }
+      .tool-icon {
+        min-width: 0;
+        height: 28px;
+        padding: 0 4px;
+        font-size: .7rem;
+      }
+      /* The log grows with the traffic; unbounded it pushes RX/TX off the screen
+       * completely.  Bound it so it scrolls inside, like the desktop layout
+       * (where the pane is sized by the viewport) already does. */
+      .debug-log {
+        max-height: min(32vh, 300px);
+      }
+      .pane { grid-template-columns: 24px 1fr; }
+      #theme-switcher {
+        top: 10px;
+        right: 10px;
+        padding: 4px 6px;
+        gap: 4px;
+        flex-direction: row;
+      }
+      .titlebar {
+        padding-right: 0;
+      }
+      .theme-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 13px;
+      }
+    }
+
+    /* Phones.  Only density: the decorative chrome above the workspace is worth
+     * ~80px of table space there.  Everything is additive - the desktop layout
+     * (>= 921px) and the interaction logic are untouched. */
+    @media (max-width: 600px) {
+      /* hero: the brand pill sits beside the title instead of on a row of its
+       * own, and the marketing subtitle goes away */
+      .titlebar {
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 6px;
+        padding-top: 0;
+      }
+      .brand-watermark {
+        grid-column: 1;
+        padding: 3px 8px;
+        font-size: 11px;
+      }
+      .title-left {
+        grid-column: 2;
+        margin-bottom: 0;
+      }
+      .subtitle {
+        display: none;
+      }
+      /* the containers around the controls: every padding/margin/gap here was
+       * sized for a desktop and costs a phone several rows of table space */
+      .wrap {
+        gap: 4px;
+      }
+      .hero {
+        padding: 2px 6px;
+      }
+      .action-row {
+        margin-top: 0;
+        padding-top: 2px;
+      }
+      .toolbar-left {
+        gap: 4px;
+      }
+      .tool-icon {
+        height: 26px;
+        font-size: .66rem;
+      }
+      /* the panes: 8px of padding on both sides of every table adds up */
+      .pane-body {
+        padding: 6px;
+      }
+      /* bottom status bar: two fixed rows instead of one long line the user has
+       * to scroll sideways.  The State chip owns the first row (its text is the
+       * long one) and the device identity follows on the second; Interface and
+       * Endpoint are USB plumbing that the device panel and the debug log
+       * already show, and leaving them out is what keeps this at two rows.
+       * DOM order: State, VID/PID, Interface, Endpoint, Firmware, Hardware. */
+      .status-footer {
+        padding: 2px 6px;
+        align-items: stretch;
+      }
+      .status-strip {
+        display: grid;
+        /* Columns sized to what the three chips need ("VID/PID: 1d50:606f" is
+         * the widest), not evenly: an even split clips the serial-ish value. */
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 0.85fr);
+        gap: 3px 4px;
+        overflow: visible;              /* no sideways scrolling any more */
+      }
+      .status-strip > .chip:nth-child(1) {
+        grid-column: 1 / -1;            /* State */
+      }
+      .status-strip > .chip:nth-child(3),
+      .status-strip > .chip:nth-child(4) {
+        display: none;                  /* Interface, Endpoint */
+      }
+      #chipState {
+        max-width: 100%;                /* cell is full width already */
+      }
+      .status-footer .chip {
+        padding: 1px 4px;
+        gap: 2px;
+        font-size: .64rem;
+        min-width: 0;
+        overflow: hidden;
+      }
+      /* last resort: a long value (a date-like firmware string) ellipsizes
+       * instead of pushing the chip out of its cell */
+      .status-footer .chip .mono {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .status-footer .chip .mono,
+      .status-footer .status-label {
+        font-size: .62rem;
+      }
+      .debug-head {
+        padding-bottom: 3px;
+        font-size: .66rem;
+      }
+      /* keep the RX/TX panes the tallest thing on the screen */
+      .debug-log {
+        max-height: min(26vh, 240px);
+        font-size: .62rem;
+      }
+
+      /* ---- Bus Configuration panel -----------------------------------------
+       * Device information: the pills are a notch smaller and tighter on a
+       * phone; the layout itself comes from the #deviceInfoPlaceholder rules. */
+      #deviceInfoPlaceholder {
+        gap: 2px 3px;
+      }
+      #deviceInfoPlaceholder .dev-item {
+        padding: 1px 6px;
+        font-size: .68rem;
+      }
+
+      /* The channel table is the widest thing in the dialog (five nowrap columns
+       * with a select and two ⚙ buttons in the Timing cell), which used to drag
+       * the whole dialog into a horizontal scroll.  Two things fix that:
+       *
+       *  1. the table scrolls inside the box wrapped around it (see the neutral
+       *     .channel-scroll rule above) - the frame added here is also the hint
+       *     that it can be swiped if it still does not fit;
+       *  2. the State column is dropped.  It is the only read-only column, and
+       *     without it the row's controls (Start tick, termination tick, timing
+       *     select, ⚙ arb, ⚙ data) fit the dialog, so nothing has to be swiped to
+       *     *operate* it.  Running/pending is still visible on the ⚠ Apply
+       *     button and in its tooltip. */
+      #connectModal #channelRows tr > td:last-child,
+      #connectModal .compact-table thead tr > th:last-child {
+        display: none;
+      }
+      #connectModal .channel-scroll {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(7, 17, 34, 0.78);
+      }
+      body[data-theme="light"] #connectModal .channel-scroll {
+        background: rgba(255, 255, 255, 0.9);
+      }
+      #connectModal .compact-table th,
+      #connectModal .compact-table td {
+        padding: 2px 3px;
+      }
+      /* The Timing cell is what makes the table wide: the select plus ⚙ arb and
+       * ⚙ data.  They stay on one line (the buttons must not drop under the
+       * select) - the select is the flexible part instead: min-width: 0 lets it
+       * shrink below its own text, so the cell, and with it the table, always
+       * fits the dialog.  What stays visible is the bitrate pair
+       * ("500k / 2M"); the sample point suffix is the part that gets clipped on
+       * a phone.  With the header shortened to "Term" the ticks end up next to
+       * the select instead of a column away.
+       * :has() picks the cell holding the select (works with or without the
+       * termination column); where :has() is unsupported the framed scroll box
+       * above takes over. */
+      #connectModal .compact-table td:has(select) {
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 3px;
+      }
+      #connectModal .compact-table td:has(select) select {
+        flex: 1 1 auto;
+        /* hard floor (not 0): a select squeezed to a few characters is not worth
+         * the last pixels.  With the row's floor at ~4.5em the table still fits
+         * the narrowest phone (≈265px of 274px available). */
+        min-width: 4.5em;
+      }
+      /* the row builder puts a 4px inline margin on the first ⚙ button, which a
+       * rule cannot beat - and the flex gap already spaces the buttons */
+      #connectModal .compact-table td:has(select) button {
+        flex: 0 0 auto;
+        margin-left: 0 !important;
+      }
+
+      /* ---- Add/Edit TX panels on phones ------------------------------------
+       * Centred, the 12 column grid squeezed the fields into 84/56/196px cells
+       * on a 360px screen and the soft keyboard pushed Add/Done/Cancel out of
+       * view.  As a full-width sheet at the bottom the fields get the whole
+       * width, the controls become touch sized and the actions stay stuck to the
+       * bottom edge.  This panel needs vertical room, so the "Add" title and the
+       * cycle/comment rows keep their desktop order - only the cells change. */
+      #txModal,
+      #txDataModal {
+        top: auto;
+        bottom: 0;
+        left: 0;
+        transform: none;
+        width: 100%;
+        max-width: none;
+        max-height: 88dvh;
+        border-radius: 14px 14px 0 0;
+        padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+      }
+      /* The field layout (two columns, wide rows for Data/Flags/Comment) is
+       * shared with the desktop - see the #txModal block above.  What is left
+       * here is only what a phone needs on top of it: the sheet geometry and
+       * touch sized controls. */
+      /* 16px is the smallest font iOS does not zoom the page for on focus */
+      #txModal input:not([type="checkbox"]),
+      #txModal select,
+      #txDataModal select {
+        min-height: 42px;
+        padding: 8px 10px;
+        font-size: 16px;
+      }
+      /* The byte boxes get their size from app.js as an inline style, so this is
+       * one of the few places that needs !important. */
+      #txModal input[id^="data-byte"],
+      #txDataModal input[id^="full-byte"] {
+        width: 3em !important;
+        height: 40px !important;
+        padding: 6px 2px !important;
+        font-size: 16px !important;
+      }
+      #txModal #btnMoreData {
+        height: 40px;
+      }
+      /* actions: pinned to the sheet's bottom edge, reachable while it scrolls */
+      #txModal .modal-actions-right,
+      #txDataModal .modal-actions-right {
+        position: sticky;
+        bottom: 0;
+        margin: 0;
+        padding: 8px 0 2px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+      }
+      #txModal .modal-actions-right button,
+      #txDataModal .modal-actions-right button {
+        flex: 1 1 0;
+        min-height: 44px;
+        padding: 4px 10px;
+        font-size: .82rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="theme-switcher">
+    <button class="theme-btn" id="themeLight" data-theme="light" title="Light Theme" aria-label="Light Theme">☀️<span class="sr-only">Light Theme</span></button>
+    <button class="theme-btn" id="themeDark" data-theme="dark" title="Dark Theme" aria-label="Dark Theme">🌙<span class="sr-only">Dark Theme</span></button>
+  </div>
+
+  <div class="wrap">
+    <section class="hero">
+      <div class="titlebar">
+        <a class="brand-watermark" href="/" aria-label="Back to Home">GeekDebug</a>
+        <div class="title-left">
+          <h1>🚌 Web CAN Utils</h1>
+          <p class="subtitle">Universal CAN monitor and transmit utility</p>
+        </div>
+      </div>
+      <div class="action-row">
+        <div class="toolbar-left">
+          <div class="protocol-inline">
+            <label for="protocolSelect">🧩 Protocol</label>
+            <select id="protocolSelect">
+              <option value="" selected disabled>Loading protocols...</option>
+            </select>
+          </div>
+          <button class="tool-icon" id="btnDevice" title="Add / configure the device and its channels">🔌 Device</button>
+          <button class="tool-icon" id="btnStartStop" title="Start / stop the bus">▶ Start</button>
+          <button class="tool-icon" id="btnReset" title="Reset bus: re-initialise controllers (clear errors, recover from bus-off)">🔄 RST</button>
+          <button class="tool-icon" id="btnOpenTxModal" title="Add Message">➕ ADD</button>
+          <button class="tool-icon" id="btnClearRx" title="Clear RX list and TX counters">🗑 CLR</button>
+          <button class="tool-icon" id="btnDebug" title="Debug mode: show every command sent to the device, in a column on the right">🐞 DEBUG</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <div class="pane">
+        <div class="pane-label">RECEIVE</div>
+        <div class="pane-body">
+          <div class="table-wrap">
+            <table class="compact-table" id="rxSummaryTable">
+              <thead>
+                <tr>
+                  <th>CH</th><th>ID</th><th>TYPE</th><th>LENGTH</th><th>DATA</th><th>Cycle</th><th>Count</th>
+                </tr>
+              </thead>
+              <tbody id="rxSummaryBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane">
+        <div class="pane-label" title="click selects · double-click sends · right-click for Add/Edit/Delete · ↑↓ select · → send · ← AUTO · Enter edit · Del remove · Ctrl+C/V copy/paste">TRANSMIT</div>
+        <div class="pane-body">
+          <div class="table-wrap">
+            <table class="compact-table" id="txSummaryTable">
+              <thead>
+                <tr>
+                  <th>CH</th><th>ID</th><th>TYPE</th><th>LENGTH</th><th>DATA</th><th>Cycle</th><th>Count</th><th>Trigger</th><th>Comment</th>
+                </tr>
+              </thead>
+              <tbody id="txTaskBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <aside class="pane" id="debugPane">
+        <div class="pane-label" title="every control transfer and frame the host sends, and what the device answers">DEBUG</div>
+        <div class="pane-body">
+          <div class="debug-head">
+            <button class="tool-icon" id="btnDebugClear" title="Clear the log">🗑 Clear</button>
+            <label title="Also record normal frames: sent frames, received frames and TX echoes. Leaving this off keeps a busy bus from costing anything (only the device commands are logged).">
+              <input type="checkbox" id="debugFrames"> TX/RX/echo frames
+            </label>
+            <span class="status-label" id="debugCount">0 lines</span>
+          </div>
+          <div class="table-wrap debug-log" id="debugLog"></div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="status-footer">
+      <div class="status-strip">
+        <span class="chip"><span class="status-label">State:</span> <span class="mono" id="chipState" title="Bus configuration (click)" style="cursor:pointer">Disconnected</span></span>
+        <span class="chip"><span class="status-label">VID/PID:</span> <span class="mono" id="chipVidPid">-</span></span>
+        <span class="chip"><span class="status-label">Interface:</span> <span class="mono" id="chipIf">-</span></span>
+        <span class="chip"><span class="status-label">Endpoint:</span> <span class="mono" id="chipEp">-</span></span>
+        <span class="chip"><span class="status-label">Firmware:</span> <span class="mono" id="chipFwVer">-</span></span>
+        <span class="chip"><span class="status-label">Hardware:</span> <span class="mono" id="chipHw">-</span></span>
+      </div>
+    </section>
+
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+
+    <section class="popup-panel" id="connectModal">
+      <div class="modal-head">
+        <h2 style="margin:0;">Bus Configuration</h2>
+        <button class="close-btn" id="btnCloseConnectModal">×</button>
+      </div>
+      <div class="row">
+        <div class="field w12">
+          <label>Device</label>
+          <div id="deviceInfoPlaceholder" style="font-size:.82rem;color:var(--ink-soft);padding:4px 0;"></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field w12">
+          <label title="timing is set per channel and per phase — use the ⚙ buttons in the channel rows">Timing</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:2px 0">
+            <span style="font-size:.72rem" title="applies this preset to every channel (resets custom timings)">Preset for all</span>
+            <select id="preset" title="presets are listed with their resulting sample point" style="padding:4px 6px;font-size:.78rem"></select>
+            <button id="btnApplyAllTiming" class="tool-icon" title="apply this preset to every channel">Apply</button>
+            <span id="clockInfo" style="font-size:.72rem;color:var(--ink-soft)"></span>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field w12">
+          <label title="channels ticked in Start are started together; each phase has its own ⚙ for custom timing">Channels</label>
+          <div class="channel-scroll">
+            <table class="compact-table">
+              <thead>
+                <tr><th>CH</th><th>Start</th><th id="thTerm" title="120 ohm terminator of this channel">Term</th><th>Timing</th><th>State</th></tr>
+              </thead>
+              <tbody id="channelRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field w4">
+          <label><input type="checkbox" id="listenOnly"> Listen-Only</label>
+        </div>
+        <div class="field w8">
+          <label><input type="checkbox" id="forceClassic"> Force CAN2.0</label>
+        </div>
+      </div>
+      <div class="buttons" style="margin-bottom: 8px;">
+        <button id="btnStartBus">Start</button>
+        <button id="btnApplyPending" title="re-initialise the ticked running channels with the settings above, and stop the unticked ones">⚠ Apply</button>
+        <button id="btnDisconnectDevice">Disconnect</button>
+      </div>
+    </section>
+
+    <!-- Sub-panel for ONE phase of ONE channel: clicking a ⚙ means "custom", so
+         there is no preset logic and nothing collapsed here - just bitrate,
+         sample point and the list of timings to pick from.  OK commits this
+         phase and returns to the device panel. -->
+    <section class="popup-panel" id="timingModal">
+      <div class="modal-head">
+        <h2 style="margin:0;font-size:1rem;" id="timingTitle">Bit Timing</h2>
+        <button class="close-btn" id="btnCloseTimingModal">×</button>
+      </div>
+
+      <div class="row">
+        <div class="field w12">
+          <label title="CAN clock the timings are computed for">Clock</label>
+          <div id="timingClock" style="font-size:.78rem;padding:2px 0">-</div>
+        </div>
+      </div>
+
+      <div class="row" id="nominalPhase">
+        <div class="field w12">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:2px 0">
+            <span style="font-size:.74rem">Bitrate</span>
+            <input id="nomBitrate" value="500" style="width:80px;padding:4px 6px;font-size:.78rem">
+            <span style="font-size:.74rem">kbit/s</span>
+            <span style="font-size:.74rem;margin-left:10px">Sample point</span>
+            <input id="nomSample" value="80" style="width:64px;padding:4px 6px;font-size:.78rem">
+            <span style="font-size:.74rem">%</span>
+          </div>
+          <div class="table-wrap" style="max-height:280px;overflow:auto">
+            <table class="compact-table">
+              <thead><tr><th>brp</th><th>tseg1</th><th>tseg2</th><th>sjw</th><th>Bitrate</th><th>Err</th><th>SP</th><th></th></tr></thead>
+              <tbody id="nomTable"></tbody>
+            </table>
+          </div>
+          <div id="nomResult" style="font-size:.8rem;padding:3px 0;font-family:var(--mono, monospace)"></div>
+        </div>
+      </div>
+
+      <div class="row" id="dataPhase">
+        <div class="field w12">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:2px 0">
+            <span style="font-size:.74rem">Bitrate</span>
+            <input id="dataBitrate" value="2000" style="width:80px;padding:4px 6px;font-size:.78rem">
+            <span style="font-size:.74rem">kbit/s</span>
+            <span style="font-size:.74rem;margin-left:10px">Sample point</span>
+            <input id="dataSample" value="80" style="width:64px;padding:4px 6px;font-size:.78rem">
+            <span style="font-size:.74rem">%</span>
+          </div>
+          <div class="table-wrap" style="max-height:280px;overflow:auto">
+            <table class="compact-table">
+              <thead><tr><th>brp</th><th>tseg1</th><th>tseg2</th><th>sjw</th><th>Bitrate</th><th>Err</th><th>SP</th><th></th></tr></thead>
+              <tbody id="dataTable"></tbody>
+            </table>
+          </div>
+          <div id="dataResult" style="font-size:.8rem;padding:3px 0;font-family:var(--mono, monospace)"></div>
+        </div>
+      </div>
+
+      <div class="buttons">
+        <button id="btnTimingOk" title="apply this phase and return to the device panel">OK</button>
+        <button id="btnTimingCancel" title="discard and return to the device panel">Cancel</button>
+      </div>
+    </section>
+
+    <section class="popup-panel mini-modal" id="txModal">
+      <div class="modal-head">
+        <h2 id="txModalTitle">Add TX Frame</h2>
+        <button class="close-btn" id="btnCloseTxModal">×</button>
+      </div>
+      <div class="row">
+        <div class="field w3">
+          <label>CAN ID (hex)</label>
+          <input id="txId" value="0">
+        </div>
+        <div class="field w2" id="lenField">
+          <label>Data Len</label>
+          <select id="txLen"></select>
+        </div>
+        <div class="field w7" id="dataField">
+          <label>Data (hex, one box per byte)</label>
+          <div class="data-line">
+            <div id="txByteBoxes"></div>
+            <button id="btnMoreData" title="edit all bytes, also beyond 8">…</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field w3">
+          <label>Cycle (ms, 0=manual)</label>
+          <input id="txPeriod" type="text" inputmode="numeric" value="100">
+        </div>
+        <div class="field w2">
+          <label>Channel</label>
+          <select id="txChannel"></select>
+        </div>
+        <div class="field w7">
+          <label>Flags</label>
+          <div class="flags">
+            <label>
+              <input type="checkbox" id="txExt"> Ext
+            </label>
+            <label>
+              <input type="checkbox" id="txFd"> FD
+            </label>
+            <label>
+              <input type="checkbox" id="txRtr"> RTR
+            </label>
+            <label>
+              <input type="checkbox" id="txBrs"> BRS
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field w12">
+          <label>Comment</label>
+          <input id="txComment" value="">
+        </div>
+      </div>
+      <div class="modal-actions-right">
+        <button id="btnTxAdd" title="save this message and clear the form for the next one">Add</button>
+        <button id="btnTxDone" title="save this message and close the panel">Done</button>
+        <button id="btnTxCancel" title="close the panel without saving">Cancel</button>
+      </div>
+    </section>
+
+    <!-- Context menu -->
+    <div id="ctxMenu" style="display:none;position:fixed;z-index:99;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px 0;min-width:140px;box-shadow:0 8px 24px rgba(0,0,0,0.4)">
+      <div data-ctx="new-tx" style="padding:6px 14px;cursor:pointer;font-size:.78rem;white-space:nowrap">➕ New Message</div>
+      <div data-ctx="edit-tx" style="padding:6px 14px;cursor:pointer;font-size:.78rem;white-space:nowrap">✎ Edit</div>
+      <div data-ctx="del-tx" style="padding:6px 14px;cursor:pointer;font-size:.78rem;white-space:nowrap">✕ Delete</div>
+    </div>
+
+    <section class="popup-panel mini-modal" id="txDataModal">
+      <div class="modal-head">
+        <h2 style="margin:0;">Full Data Editor</h2>
+        <button class="close-btn" id="btnCloseDataModal">x</button>
+      </div>
+      <div class="row">
+        <div class="field w3">
+          <label>Length</label>
+          <select id="txDataLen"></select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field w12">
+          <label>Data (hex, one box per byte)</label>
+          <div id="txDataBoxes"></div>
+        </div>
+      </div>
+      <div class="modal-actions-right">
+        <button id="btnApplyDataModal">OK</button>
+        <button id="btnCancelDataModal">Cancel</button>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="./app.js?v=1.4"></script>
+</body>
+</html>
