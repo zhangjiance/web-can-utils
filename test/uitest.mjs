@@ -773,7 +773,11 @@ check("only the byte that changed flashes", JSON.stringify(animatedBytes(0x600))
 check("the row shows the new payload", /01 09 03/.test(rxRowFor(0x600).textContent),
     rxRowFor(0x600).textContent.replace(/\s+/g, " "));
 
-/* the highlight must stay on the values that changed, never on the whole list */
+/* The highlight must stay on the values that changed, never on the whole list.
+ * The flash colour is theme-dependent: pin dark here so the colour checks do
+ * not depend on the stored/default theme. */
+click("themeDark");
+await sleep(20);
 flashes.length = 0;
 device.queueRx(rxFrame(1, 0x601, [0xaa, 0xbb]));         /* a second, idle row */
 await waitFor("row 0x601", () => !!rxRowFor(0x601), 1000);
