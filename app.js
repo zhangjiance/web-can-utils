@@ -189,7 +189,7 @@ import "./gs_usb.js";
   }
 
   function initTheme() {
-    const saved = localStorage.getItem("web-can-utils-theme") || "dark";
+    const saved = localStorage.getItem("web-can-utils-theme") || "light";
     setTheme(saved);
     ui.themeLight.addEventListener("click", () => setTheme("light"));
     ui.themeDark.addEventListener("click", () => setTheme("dark"));
