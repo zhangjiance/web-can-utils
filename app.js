@@ -11,7 +11,7 @@ import "./gs_usb.js";
    *
    * The list is the usual CAN FD spread (CiA 601 style): 125k/250k/500k/1M
    * arbitration paired with 1M/2M/4M/5M/8M data.  Classic rates come for free -
-   * with Force CAN2.0 ticked only the nominal phase is programmed - as does any
+   * with the per-channel Classic tick only the nominal phase is programmed - as does any
    * rate reachable through the per-phase ⚙ dialog, which takes explicit values.
    *
    * Every pair here solves on the 80 MHz CAN clock within the ranges the device
@@ -67,13 +67,14 @@ import "./gs_usb.js";
     btnDisconnectDevice: document.getElementById("btnDisconnectDevice"),
 
     thTerm: document.getElementById("thTerm"),
+    thListen: document.getElementById("thListen"),
+    thLoop: document.getElementById("thLoop"),
+    thClassic: document.getElementById("thClassic"),
     channelRows: document.getElementById("channelRows"),
     clockInfo: document.getElementById("clockInfo"),
     btnApplyAllTiming: document.getElementById("btnApplyAllTiming"),
     txChannel: document.getElementById("txChannel"),
     preset: document.getElementById("preset"),
-    listenOnly: document.getElementById("listenOnly"),
-    forceClassic: document.getElementById("forceClassic"),
 
     timingModal: document.getElementById("timingModal"),
     btnCloseTimingModal: document.getElementById("btnCloseTimingModal"),
@@ -1824,28 +1825,44 @@ import "./gs_usb.js";
 
   function channelSetting(ch) {
     if (!state.channelSettings[ch]) {
+      const caps = state.adapter?.deviceInfo?.capabilities || {};
       /* where a channel has a switchable terminator it is on by default */
-      state.channelSettings[ch] = { start: true, termination: true };
+      state.channelSettings[ch] = {
+        start: true,
+        termination: true,
+        listenOnly: false,
+        loopback: false,
+        classic: !caps.fd
+      };
     }
     return state.channelSettings[ch];
   }
 
   /*
    * One row per channel of the connected device.  Each row carries its own
-   * "Start" tick and - where the device/board supports it (gs_usb with a
-   * terminator GPIO) - its own termination tick, because termination
-   * is a per-channel switch.
+   * "Start" tick, termination, mode (Listen-Only / Loopback / Classic) and
+   * timing: all of those are per-channel switches in the firmware - the gs_usb
+   * MODE request is addressed to one channel and carries that channel's feature
+   * flags, so one channel can run internal loopback while the next stays on a
+   * normal bus.
    */
   function renderChannelRows() {
     const caps = state.adapter?.deviceInfo?.capabilities || {};
     const nCh = state.adapter?.deviceInfo?.channels || 1;
     const showTerm = !!caps.termination;
+    const showListen = !!caps.listenOnly;
+    const showLoop = !!caps.loopback;
+    const showClassic = !!caps.fd;
 
     ui.thTerm.style.display = showTerm ? "" : "none";
+    ui.thListen.style.display = showListen ? "" : "none";
+    ui.thLoop.style.display = showLoop ? "" : "none";
+    ui.thClassic.style.display = showClassic ? "" : "none";
     ui.channelRows.innerHTML = "";
 
     for (let ch = 0; ch < nCh; ch++) {
       const setting = channelSetting(ch);
+      const fdMode = !setting.classic && !!caps.fd;
       const tr = document.createElement("tr");
 
       const cell = (html) => {
@@ -1867,6 +1884,7 @@ import "./gs_usb.js";
       tr.appendChild(cell(channelLabel(ch)));
 
       const startCell = document.createElement("td");
+      startCell.className = "flag-cell";
       const stateCell = document.createElement("td");
       startCell.appendChild(checkbox("start", setting.start, (v) => {
         setting.start = v;
@@ -1876,18 +1894,20 @@ import "./gs_usb.js";
          * reference to it. */
         paintChannelState(stateCell, ch, setting, channelIsPending(ch));
         refreshPendingUi();
-      }));
+      }, "Start this channel"));
       tr.appendChild(startCell);
 
+      const termCell = document.createElement("td");
+      termCell.className = "flag-cell";
+      termCell.style.display = showTerm ? "" : "none";
       if (showTerm) {
-        const termCell = document.createElement("td");
         /* the device tells us what its terminators are doing right now
          * (GS_USB_BREQ_GET_CAN_RESISTER_ENABLE_STATE); the tick is the intent */
         const reported = state.adapter && state.adapter.terminationState
           ? state.adapter.terminationState[ch] : undefined;
         const termTitle = reported === undefined || reported === null
-          ? "120 ohm terminator on this channel (device did not report its state)"
-          : `120 ohm terminator on this channel. Device currently reports: ${reported ? "on" : "off"}`;
+          ? "120 \u03a9 terminator"
+          : `120 \u03a9 terminator (device: ${reported ? "on" : "off"})`;
         termCell.appendChild(checkbox("term", setting.termination, (v) => {
           setting.termination = v;
           /* the channel's running config no longer matches: repaint the row so
@@ -1895,8 +1915,49 @@ import "./gs_usb.js";
           renderChannelRows();
           renderTimingSummary();
         }, termTitle));
-        tr.appendChild(termCell);
       }
+      tr.appendChild(termCell);
+
+      /* Per-channel controller mode.  The firmware combines these two bits:
+       * only LS = bus monitoring, only LB = external loopback, both = internal
+       * loopback (see the legend under the table).  The cells stay in the row
+       * even when the device lacks a feature, so the remaining cells keep their
+       * column. */
+      const listenCell = document.createElement("td");
+      listenCell.className = "flag-cell";
+      listenCell.style.display = showListen ? "" : "none";
+      if (showListen) {
+        listenCell.appendChild(checkbox("listen", setting.listenOnly, (v) => {
+          setting.listenOnly = v;
+          renderChannelRows();
+          renderTimingSummary();
+        }, "Listen-Only: receive, no ACK"));
+      }
+      tr.appendChild(listenCell);
+
+      const loopCell = document.createElement("td");
+      loopCell.className = "flag-cell";
+      loopCell.style.display = showLoop ? "" : "none";
+      if (showLoop) {
+        loopCell.appendChild(checkbox("loop", setting.loopback, (v) => {
+          setting.loopback = v;
+          renderChannelRows();
+          renderTimingSummary();
+        }, "Loopback: receive own TX"));
+      }
+      tr.appendChild(loopCell);
+
+      const classicCell = document.createElement("td");
+      classicCell.className = "flag-cell";
+      classicCell.style.display = showClassic ? "" : "none";
+      if (showClassic) {
+        classicCell.appendChild(checkbox("classic", setting.classic, (v) => {
+          setting.classic = v;
+          renderChannelRows();
+          renderTimingSummary();
+        }, "Classic CAN 2.0 (no FD/BRS)"));
+      }
+      tr.appendChild(classicCell);
 
       /* Per-channel timing: pick a preset right here (the common case needs no
        * dialog at all), or open the dialog for custom work. */
@@ -1908,7 +1969,7 @@ import "./gs_usb.js";
        * !important */
       timingSelect.style.cssText = "";
       for (const key of Object.keys(PRESET_TO_BITRATE)) {
-        const plan = presetPlan(key, !ui.forceClassic.checked);
+        const plan = presetPlan(key, fdMode);
         const sp = (plan && plan.nominal)
           ? ` @${(plan.nominal.samplePoint * 100).toFixed(0)}%${plan.data ? `/${(plan.data.samplePoint * 100).toFixed(0)}%` : ""}`
           : "";
@@ -1967,11 +2028,14 @@ import "./gs_usb.js";
         return b;
       };
 
-      timingCell.appendChild(timingSelect);
-      timingCell.appendChild(gear("nominal", "⚙ arb"));
-      if (!ui.forceClassic.checked) {
-        timingCell.appendChild(gear("data", "⚙ data"));
+      const timingWrap = document.createElement("div");
+      timingWrap.className = "timing-controls";
+      timingWrap.appendChild(timingSelect);
+      timingWrap.appendChild(gear("nominal", "⚙ arb"));
+      if (fdMode) {
+        timingWrap.appendChild(gear("data", "⚙ data"));
       }
+      timingCell.appendChild(timingWrap);
       tr.appendChild(timingCell);
 
       /* State column: running / pending (the device no longer matches the
@@ -2043,13 +2107,17 @@ import "./gs_usb.js";
   }
 
   /* Everything the panel defines for one channel: its own timing (preset or the
-   * custom registers), its own termination, and the shared flags.  `snapshot`
-   * (from the last Start) is used by RST to re-initialise what was running. */
+   * custom registers), its own termination, mode (listen-only / loopback /
+   * classic) and fdMode.  `snapshot` (from the last Start) is used by RST to
+   * re-initialise what was running. */
   function buildBusConfig(channel, snapshot) {
     const caps = state.adapter?.deviceInfo?.capabilities || {};
-    const fdMode = snapshot ? snapshot.fdMode : !ui.forceClassic.checked;
-    const listenOnly = snapshot ? snapshot.listenOnly : !!ui.listenOnly.checked;
-    const t = snapshot ? snapshot.perChannel[channel].timing : channelTiming(channel);
+    const setting = channelSetting(channel);
+    const snap = snapshot ? snapshot.perChannel[channel] : null;
+    const fdMode = snap ? !!snap.fdMode : (!setting.classic && !!caps.fd);
+    const listenOnly = snap ? !!snap.listenOnly : !!setting.listenOnly;
+    const loopback = snap ? !!snap.loopback : !!setting.loopback;
+    const t = snap ? snap.timing : channelTiming(channel);
     const presetKey = t.presetKey || ui.preset.value;
     const bits = PRESET_TO_BITRATE[presetKey] || PRESET_TO_BITRATE[Object.keys(PRESET_TO_BITRATE)[0]];
 
@@ -2058,6 +2126,7 @@ import "./gs_usb.js";
       nominalBitrate: bits.nominal,
       dataBitrate: bits.data,
       listenOnly,
+      loopback,
       fdMode
     };
 
@@ -2069,9 +2138,7 @@ import "./gs_usb.js";
     }
 
     if (caps.termination) {
-      cfg.termination = snapshot
-        ? !!snapshot.perChannel[channel].termination
-        : !!channelSetting(channel).termination;
+      cfg.termination = snap ? !!snap.termination : !!setting.termination;
     }
 
     return new XCanConfig(cfg);
@@ -2079,16 +2146,16 @@ import "./gs_usb.js";
 
   /* Snapshot of the panel for RST: what is running right now, per channel. */
   function snapshotBusConfig() {
-    const snapshot = {
-      listenOnly: !!ui.listenOnly.checked,
-      fdMode: !ui.forceClassic.checked,
-      perChannel: {}
-    };
+    const caps = state.adapter?.deviceInfo?.capabilities || {};
+    const snapshot = { perChannel: {} };
     for (const ch of state.startedChannels) {
-      const t = channelTiming(ch);
+      const setting = channelSetting(ch);
       snapshot.perChannel[ch] = {
-        termination: !!channelSetting(ch).termination,
-        timing: cloneTiming(t)
+        termination: !!setting.termination,
+        timing: cloneTiming(channelTiming(ch)),
+        listenOnly: !!setting.listenOnly,
+        loopback: !!setting.loopback,
+        fdMode: !setting.classic && !!caps.fd
       };
     }
     return snapshot;
@@ -2212,6 +2279,12 @@ import "./gs_usb.js";
     const tt = t || channelTiming(ch);
     const { fclk } = timingContext(phase);
     const custom = tt[phase];
+    const caps = state.adapter?.deviceInfo?.capabilities || {};
+    const fdMode = !channelSetting(ch).classic && !!caps.fd;
+
+    if (phase === "data" && !fdMode) {
+      return null;
+    }
 
     if (custom) {
       const brp = Number(custom.brp);
@@ -2233,7 +2306,7 @@ import "./gs_usb.js";
       };
     }
 
-    const plan = presetPlan(tt.presetKey, !ui.forceClassic.checked);
+    const plan = presetPlan(tt.presetKey, fdMode);
     return (plan && (phase === "data" ? plan.data : plan.nominal)) || null;
   }
 
@@ -2262,23 +2335,27 @@ import "./gs_usb.js";
   }
 
   /* Everything that defines a channel's configuration, as a comparable string. */
-  function configKey({ timing, termination, fdMode, listenOnly }) {
+  function configKey({ timing, termination, fdMode, listenOnly, loopback }) {
     return JSON.stringify({
       presetKey: timing.presetKey,
       nominal: timing.nominal,
       data: timing.data,
       termination: !!termination,
       fdMode: !!fdMode,
-      listenOnly: !!listenOnly
+      listenOnly: !!listenOnly,
+      loopback: !!loopback
     });
   }
 
   function configKeyFor(ch) {
+    const caps = state.adapter?.deviceInfo?.capabilities || {};
+    const setting = channelSetting(ch);
     return configKey({
       timing: channelTiming(ch),
-      termination: channelSetting(ch).termination,
-      fdMode: !ui.forceClassic.checked,
-      listenOnly: !!ui.listenOnly.checked
+      termination: setting.termination,
+      fdMode: !setting.classic && !!caps.fd,
+      listenOnly: !!setting.listenOnly,
+      loopback: !!setting.loopback
     });
   }
 
@@ -2326,13 +2403,26 @@ import "./gs_usb.js";
     }
   }
 
+  /* The global "preset for all" list has no single channel to ask, so show the
+   * data-phase sample point as soon as any channel runs FD. */
+  function anyChannelFd() {
+    const caps = state.adapter?.deviceInfo?.capabilities || {};
+    if (!caps.fd) return false;
+    const nCh = state.adapter?.deviceInfo?.channels || 1;
+    for (let ch = 0; ch < nCh; ch++) {
+      if (!channelSetting(ch).classic) return true;
+    }
+    return false;
+  }
+
   /* Preset labels carry the sample point they resolve to. */
   function renderPresetOptions(select, selectedKey) {
     if (!select) return;
     const keep = selectedKey || select.value;
     select.innerHTML = "";
+    const fdMode = anyChannelFd();
     for (const key of Object.keys(PRESET_TO_BITRATE)) {
-      const plan = presetPlan(key, !ui.forceClassic.checked);
+      const plan = presetPlan(key, fdMode);
       const sp = (plan && plan.nominal)
         ? ` — SP ${fmtSamplePoint(plan.nominal.samplePoint)}${plan.data ? ` / ${fmtSamplePoint(plan.data.samplePoint)}` : ""}`
         : "";
@@ -2638,6 +2728,9 @@ import "./gs_usb.js";
       }
 
       state.busReady = state.startedChannels.length > 0;
+      /* Apply changed what is running: RST must restore this, not the config
+       * from the previous Start. */
+      state.lastBusConfig = snapshotBusConfig();
 
       if (stopped.length) {
         /* A stopped channel must not keep sending: drop the periodic tasks that
@@ -2667,7 +2760,7 @@ import "./gs_usb.js";
     }
   }
 
-  /* Connect: pick device → query info → show bus config modal */  /* Connect: pick device → query info → show bus config modal */  /* Connect: pick device → query info → show bus config modal */
+  /* Connect: pick device → query info → show bus config modal */
   async function doConnect() {
     try {
       const protocol = ui.protocolSelect.value;
@@ -2708,7 +2801,10 @@ import "./gs_usb.js";
       for (let c = 0; c < nCh; c++) {
         state.channelSettings[c] = {
           start: true,
-          termination: !!(info.capabilities && info.capabilities.termination)
+          termination: !!(info.capabilities && info.capabilities.termination),
+          listenOnly: false,
+          loopback: false,
+          classic: !(info.capabilities && info.capabilities.fd)
         };
       }
       state.startedChannels = [];
@@ -2744,6 +2840,7 @@ import "./gs_usb.js";
         `FD ${caps.fd ? "\u2713" : "\u2717"}`,
         `BRS ${caps.brs ? "\u2713" : "\u2717"}`,
         `Listen-Only ${caps.listenOnly ? "\u2713" : "\u2717"}`,
+        `Loop-Back ${caps.loopback ? "\u2713" : "\u2717"}`,
         `Termination ${caps.termination ? "\u2713" : "\u2717"}`
       ];
       if (info.serial && info.serial !== "Unknown") {
@@ -2966,8 +3063,9 @@ import "./gs_usb.js";
         state.runningConfig[ch] = configKey({
           timing: snap.perChannel[ch].timing,
           termination: snap.perChannel[ch].termination,
-          fdMode: snap.fdMode,
-          listenOnly: snap.listenOnly
+          fdMode: snap.perChannel[ch].fdMode,
+          listenOnly: snap.perChannel[ch].listenOnly,
+          loopback: snap.perChannel[ch].loopback
         });
       }
       state.busReady = true;
@@ -3253,14 +3351,6 @@ import "./gs_usb.js";
     ui.preset.addEventListener("change", () => {
       /* the panel select is "apply to all" - it also updates the summary */
       renderTimingSummary();
-    });
-    ui.forceClassic.addEventListener("change", () => {
-      renderTimingSummary();
-      renderPresetOptions(ui.preset, ui.preset.value);
-      renderChannelRows();
-      if (state.timingDraft) {
-        renderTimingResults();
-      }
     });
     ui.btnDisconnectDevice.addEventListener("click", () => { doDisconnectFromModal().catch(() => {}); });
 

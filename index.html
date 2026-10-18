@@ -811,36 +811,70 @@
     /* the device panel carries a wide per-channel table; give it room and stop
        grid children from spilling over their column */
     /* The dialog is sized to what it holds, not to the screen.  The widest row
-     * is the device information as pills (~840px at .72rem); 920px keeps that on
-     * one line on a desktop, and the channel table - whose own content is only
-     * ~460px - gets the leftover as even column spacing (see the rule below). */
+     * is the device information as pills (~840px at .72rem); 920px keeps that
+     * on one line on a desktop. */
     #connectModal { width: min(920px, calc(100vw - 24px)); }
-    /* Whatever slack is left goes to the last column (a short, left aligned
-     * text), so no leftover width can separate the timing controls from the
-     * state.  On a phone that column is display: none and drops out of the
-     * column sizing, which leaves the slack to the flexible timing select. */
-    #connectModal .compact-table th:last-child,
-    #connectModal .compact-table td:last-child { width: 100%; }
+    /* The left half (CH + the five ticks) is split evenly between those six
+     * columns; Timing and State split the right half evenly.  A hidden tick
+     * column (device without that feature) is removed from the row, and the
+     * two flexible columns on the right take its share. */
+    #connectModal .channel-table { table-layout: fixed; }
+    #connectModal .channel-table th.half-a { width: 8.3333%; }
+    #connectModal .channel-table th:last-child,
+    #connectModal .channel-table td:last-child { text-align: right; }
     #connectModal .row > .field { min-width: 0; }
 
-    /*
-     * Column spacing.  The five nowrap columns add up to roughly 460px of
-     * content while the dialog is 760px wide (or `100vw - 24px`): that leftover
-     * has to go somewhere, and handing it to a column's width is what produced
-     * the old timing/state gap.  Adding it to every cell as horizontal padding
-     * instead keeps the columns in order, gives all of them room, and makes the
-     * table fill the dialog exactly - so nothing is left over to open a hole.
-     *
-     * The 505px is the columns' content (~460px) plus the dialog's own padding
-     * and border (22px) plus a margin, since an exact figure would start
-     * overflowing the moment a font renders a pixel wider; the /10 is two
-     * paddings across five columns.  The clamp only guards the extremes.
-     */
-    @media (min-width: 601px) {
-      #connectModal .compact-table th,
-      #connectModal .compact-table td {
-        padding: 3px clamp(4px, calc((min(920px, 100vw - 24px) - 505px) / 10), 48px);
-      }
+    /* Tick columns hold one checkbox each.  The fixed table layout gives all
+     * five the same width - the padding only centres the box inside that
+     * column, it does not add space between the columns. */
+    #connectModal .compact-table th.flag-cell,
+    #connectModal .compact-table td.flag-cell {
+      padding-left: 1px;
+      padding-right: 1px;
+      text-align: center;
+    }
+    #connectModal .compact-table .flag-cell input[type="checkbox"] {
+      margin: 0;
+      vertical-align: middle;
+    }
+
+    /* Timing cell: the select takes the slack, the two ⚙ buttons keep their
+     * size.  A wrapper is used instead of making the <td> a flex container so
+     * the table cell keeps its normal table layout. */
+    #connectModal .channel-table .timing-controls {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 4px;
+      min-width: 0;
+    }
+    #connectModal .channel-table .timing-controls select {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    #connectModal .channel-table .timing-controls button {
+      flex: 0 0 auto;
+      margin-left: 0 !important;
+    }
+
+    /* Legend: one equal cell per abbreviated column on desktop, three per row
+     * on a phone, with the combination rule on its own line so it does not
+     * read as one long sentence.  Timing/State are already full words above,
+     * so they are not repeated here. */
+    #connectModal .channel-legend {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 3px 8px;
+      font-size: .7rem;
+      color: var(--ink-soft);
+    }
+    #connectModal .channel-legend > span { white-space: normal; }
+    #connectModal .channel-legend b { color: var(--ink); font-weight: 600; }
+    #connectModal .channel-legend .legend-note {
+      grid-column: 1 / -1;
+      white-space: normal;
+      padding-top: 3px;
+      border-top: 1px solid var(--line);
     }
 
     /* Device information: one element per field, shown as small pills.  The
@@ -1209,16 +1243,17 @@
         font-size: .68rem;
       }
 
-      /* The channel table is the widest thing in the dialog (five nowrap columns
-       * with a select and two ⚙ buttons in the Timing cell), which used to drag
-       * the whole dialog into a horizontal scroll.  Two things fix that:
+      /* The channel table is the widest thing in the dialog (CH, five tick
+       * columns and a Timing cell with a select and two ⚙ buttons), which used
+       * to drag the whole dialog into a horizontal scroll.  Two things fix
+       * that:
        *
        *  1. the table scrolls inside the box wrapped around it (see the neutral
        *     .channel-scroll rule above) - the frame added here is also the hint
        *     that it can be swiped if it still does not fit;
        *  2. the State column is dropped.  It is the only read-only column, and
-       *     without it the row's controls (Start tick, termination tick, timing
-       *     select, ⚙ arb, ⚙ data) fit the dialog, so nothing has to be swiped to
+       *     without it the row's controls (the five tick columns, timing select,
+       *     ⚙ arb, ⚙ data) fit the dialog, so nothing has to be swiped to
        *     *operate* it.  Running/pending is still visible on the ⚠ Apply
        *     button and in its tooltip. */
       #connectModal #channelRows tr > td:last-child,
@@ -1237,36 +1272,15 @@
       #connectModal .compact-table td {
         padding: 2px 3px;
       }
-      /* The Timing cell is what makes the table wide: the select plus ⚙ arb and
-       * ⚙ data.  They stay on one line (the buttons must not drop under the
-       * select) - the select is the flexible part instead: min-width: 0 lets it
-       * shrink below its own text, so the cell, and with it the table, always
-       * fits the dialog.  What stays visible is the bitrate pair
-       * ("500k / 2M"); the sample point suffix is the part that gets clipped on
-       * a phone.  With the header shortened to "Term" the ticks end up next to
-       * the select instead of a column away.
-       * :has() picks the cell holding the select (works with or without the
-       * termination column); where :has() is unsupported the framed scroll box
-       * above takes over. */
-      #connectModal .compact-table td:has(select) {
-        display: flex;
-        flex-wrap: nowrap;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 3px;
-      }
-      #connectModal .compact-table td:has(select) select {
-        flex: 1 1 auto;
-        /* hard floor (not 0): a select squeezed to a few characters is not worth
-         * the last pixels.  With the row's floor at ~4.5em the table still fits
-         * the narrowest phone (≈265px of 274px available). */
-        min-width: 4.5em;
-      }
-      /* the row builder puts a 4px inline margin on the first ⚙ button, which a
-       * rule cannot beat - and the flex gap already spaces the buttons */
-      #connectModal .compact-table td:has(select) button {
-        flex: 0 0 auto;
-        margin-left: 0 !important;
+      /* Same fixed layout on a phone: the ticks get touch-sized columns, the
+       * State column is dropped, and Timing takes the rest. */
+      #connectModal .channel-table th.half-a:first-child { width: 2.6em; }
+      #connectModal .channel-table th.half-a.flag-cell { width: 1.9em; }
+      #connectModal .channel-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      /* The select is the flexible part of the Timing cell: shrink it below its
+       * own text so the row always fits, but keep a readable floor. */
+      #connectModal .channel-table .timing-controls select {
+        min-width: 3.5em;
       }
 
       /* ---- Add/Edit TX panels on phones ------------------------------------
@@ -1452,9 +1466,9 @@
         <div class="field w12">
           <label title="channels ticked in Start are started together; each phase has its own ⚙ for custom timing">Channels</label>
           <div class="channel-scroll">
-            <table class="compact-table">
+            <table class="compact-table channel-table">
               <thead>
-                <tr><th>CH</th><th>Start</th><th id="thTerm" title="120 ohm terminator of this channel">Term</th><th>Timing</th><th>State</th></tr>
+                <tr><th id="thCH" class="half-a" aria-label="Channel" title="Channel">CH</th><th id="thStart" class="half-a flag-cell" aria-label="Start" title="Start this channel">S</th><th id="thTerm" class="half-a flag-cell" aria-label="Terminator" title="120 Ω terminator">T</th><th id="thListen" class="half-a flag-cell" aria-label="Listen-Only" title="Listen-Only: receive, no ACK">LS</th><th id="thLoop" class="half-a flag-cell" aria-label="Loopback" title="Loopback: receive own TX">LB</th><th id="thClassic" class="half-a flag-cell" aria-label="Classic CAN" title="Classic CAN 2.0: no FD/BRS">C</th><th id="thTiming" class="half-b" aria-label="Timing" title="Per-channel bit timing">Timing</th><th id="thState" class="half-b" aria-label="State" title="Channel state">State</th></tr>
               </thead>
               <tbody id="channelRows"></tbody>
             </table>
@@ -1462,11 +1476,16 @@
         </div>
       </div>
       <div class="row">
-        <div class="field w4">
-          <label><input type="checkbox" id="listenOnly"> Listen-Only</label>
-        </div>
-        <div class="field w8">
-          <label><input type="checkbox" id="forceClassic"> Force CAN2.0</label>
+        <div class="field w12">
+          <div class="channel-legend">
+            <span><b>CH</b> Channel</span>
+            <span><b>S</b> Start</span>
+            <span><b>T</b> Term</span>
+            <span><b>LS</b> Listen-Only</span>
+            <span><b>LB</b> LoopBack</span>
+            <span><b>C</b> Classic</span>
+            <span class="legend-note"><b>LS + LB</b> internal loopback · <b>LB</b> external loopback</span>
+          </div>
         </div>
       </div>
       <div class="buttons" style="margin-bottom: 8px;">

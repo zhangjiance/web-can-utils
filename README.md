@@ -15,6 +15,7 @@ native application required.
 - Transmit panel with periodic send tasks
 - Bus timing presets and custom bit-timing registers
 - Hardware timestamps, error frames, termination control and debug logging
+- Per-channel listen-only, loopback (internal/external) and classic CAN
 - Responsive dark/light UI
 
 ## Run locally

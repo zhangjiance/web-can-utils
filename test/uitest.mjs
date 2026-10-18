@@ -16,7 +16,7 @@ const GS_REQ = {
     BIT_TIMING_FD: 10, BT_CONST_EXT: 11, TERMINATION: 12, LAST_ERROR: 22,
     RESISTER_STATE: 15, RESISTER_SET: 16, INTERFACE_ENDPOINT: 17,
 };
-const FEATURE = 0x0001 | 0x0010 | 0x0080 | 0x0100 | 0x0400 | 0x0800; // LISTEN_ONLY|HW_TS|PAD|FD|BT_CONST_EXT|TERMINATION
+const FEATURE = 0x0001 | 0x0002 | 0x0010 | 0x0080 | 0x0100 | 0x0400 | 0x0800; // LISTEN_ONLY|LOOP_BACK|HW_TS|PAD|FD|BT_CONST_EXT|TERMINATION
 
 class FakeUsbDevice {
     constructor(icount) {
@@ -202,14 +202,47 @@ await waitFor("device panel", () => $("connectModal").classList.contains("show")
 const devLine = $("deviceInfoPlaceholder").textContent;
 console.log("   ", devLine);
 check("device line shows capability summary", /FD \u2713/.test(devLine) && /Termination \u2713/.test(devLine), devLine);
+check("device line shows the loopback capability", /Loop-Back \u2713/.test(devLine), devLine);
 check("termination column shown", $("thTerm").style.display !== "none", $("thTerm").style.display);
+check("listen / loop / classic columns shown",
+    $("thListen").style.display !== "none" && $("thLoop").style.display !== "none"
+    && $("thClassic").style.display !== "none",
+    `${$("thListen").style.display} / ${$("thLoop").style.display} / ${$("thClassic").style.display}`);
+const headerIds = ["thCH", "thStart", "thTerm", "thListen", "thLoop", "thClassic", "thTiming", "thState"];
+const headerText = {
+    thCH: "CH", thStart: "S", thTerm: "T", thListen: "LS",
+    thLoop: "LB", thClassic: "C", thTiming: "Timing", thState: "State"
+};
+check("headers use the short text labels",
+    headerIds.every((id) => $(id).textContent.trim() === headerText[id]),
+    headerIds.map((id) => $(id).textContent.trim()).join(" / "));
+check("headers keep accessible labels and tooltips",
+    headerIds.every((id) => {
+        const el = $(id);
+        return !!el && !!el.getAttribute("aria-label") && !!el.title;
+    }),
+    headerIds.map((id) => $(id).getAttribute("aria-label")).join(" / "));
+check("left half has six equal columns, right half has Timing + State",
+    window.document.querySelectorAll("#connectModal thead th.half-a").length === 6
+    && window.document.querySelectorAll("#connectModal thead th.half-b").length === 2);
+check("flag tooltips stay short",
+    ["listen", "loop", "classic"].every((kind) =>
+        channelBoxes(kind).every((cb) => cb.title.length <= 40)),
+    JSON.stringify(["listen", "loop", "classic"].map((kind) => channelBoxes(kind)[0]?.title)));
+check("legend has six entries plus the combination line",
+    window.document.querySelectorAll(".channel-legend > span").length === 7
+    && !!window.document.querySelector(".channel-legend .legend-note"));
 check("4 start ticks + 4 termination ticks",
     channelBoxes("start").length === 4 && channelBoxes("term").length === 4);
+check("per-channel mode ticks (listen / loop / classic)",
+    channelBoxes("listen").length === 4 && channelBoxes("loop").length === 4
+    && channelBoxes("classic").length === 4,
+    `${channelBoxes("listen").length} / ${channelBoxes("loop").length} / ${channelBoxes("classic").length}`);
 check("clock line shows the fixed device clock", /80\.000 MHz/.test($("clockInfo").textContent), $("clockInfo").textContent);
 
 console.log("== termination is enabled by default ==");
 check("the panel shows what the device reported for its terminators",
-    channelBoxes("term").every((cb) => /Device currently reports: off/.test(cb.title)),
+    channelBoxes("term").every((cb) => /device: off/.test(cb.title)),
     channelBoxes("term")[0].title);
 const starts = channelBoxes("start");
 setCheckbox(starts[0], false);
@@ -597,16 +630,15 @@ check("Apply programmed the picked data timing",
     `${JSON.stringify(dataReq && timingOf(dataReq))} vs ${JSON.stringify(pickData)}`);
 check("CH2 running again (no pending)", !/pending/.test(rowText(1)), rowText(1));
 
-console.log("== Force CAN2.0 removes the data gear ==");
-$("forceClassic").checked = true;
-$("forceClassic").dispatchEvent(new window.Event("change", { bubbles: true }));
+console.log("== per-channel Classic removes only that channel's data gear ==");
+setCheckbox(channelBoxes("classic")[1], true);
 await sleep(20);
-check("data gear gone", !gear(1, "data"));
-check("arbitration gear still there", !!gear(1, "nominal"));
-$("forceClassic").checked = false;
-$("forceClassic").dispatchEvent(new window.Event("change", { bubbles: true }));
+check("CH2 data gear gone", !gear(1, "data"));
+check("CH1 data gear still there", !!gear(0, "data"));
+check("CH2 marked pending", /pending/.test(rowText(1)), rowText(1));
+setCheckbox(channelBoxes("classic")[1], false);
 await sleep(20);
-check("data gear is back", !!gear(1, "data"));
+check("CH2 data gear is back", !!gear(1, "data"));
 
 console.log("== per-row preset picker (no sub-panel) ==");
 rowSelect(2).value = "1m_4m";
@@ -620,6 +652,12 @@ check("CH2 kept its custom timings (dropdown still Custom)",
     rowSelect(1).value === "__custom", rowSelect(1).value);
 
 console.log("== restart programs each channel separately ==");
+/* Per-channel modes before the restart: CH1 internal loopback, CH2 external
+ * loopback, CH3 classic CAN, CH4 untouched FD. */
+setCheckbox(channelBoxes("listen")[0], true);
+setCheckbox(channelBoxes("loop")[0], true);
+setCheckbox(channelBoxes("loop")[1], true);
+setCheckbox(channelBoxes("classic")[2], true);
 device.ctrl.length = 0;
 click("btnStartBus");
 await waitFor("stopped", () => /Stopped/.test(stateText()));
@@ -636,6 +674,22 @@ check("CH3 got the 1M/4M preset (80 % -> brp1 tseg1 63)",
     JSON.stringify(ch3 && timingOf(ch3)));
 check("the two channels differ",
     !!ch2 && !!ch3 && JSON.stringify(timingOf(ch2)) !== JSON.stringify(timingOf(ch3)));
+
+const modeReqFor = (ch) => device.ctrl.filter((c) => c.request === GS_REQ.MODE && c.value === ch).pop();
+const modeFlagsFor = (ch) => {
+    const req = modeReqFor(ch);
+    return req ? new DataView(req.data.buffer).getUint32(4, true) : -1;
+};
+check("CH1 started as internal loopback (LISTEN_ONLY|LOOP_BACK)",
+    (modeFlagsFor(0) & 0x3) === 0x3, `0x${(modeFlagsFor(0) >>> 0).toString(16)}`);
+check("CH2 started as external loopback (LOOP_BACK only)",
+    (modeFlagsFor(1) & 0x3) === 0x2, `0x${(modeFlagsFor(1) >>> 0).toString(16)}`);
+check("CH3 started as classic CAN (no FD flag)",
+    (modeFlagsFor(2) & 0x100) === 0, `0x${(modeFlagsFor(2) >>> 0).toString(16)}`);
+check("CH3 sent no data-phase bittiming",
+    !device.ctrl.some((c) => c.request === GS_REQ.BIT_TIMING_FD && c.value === 2));
+check("CH4 stayed stopped (its Start tick is still off)",
+    modeFlagsFor(3) === -1, `0x${(modeFlagsFor(3) >>> 0).toString(16)}`);
 
 console.log("== apply preset to all ==");
 $("preset").value = "500k_2m";
