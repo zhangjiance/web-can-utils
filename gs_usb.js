@@ -243,6 +243,7 @@ const GS_MODE_RESET = 0;
 const GS_MODE_START = 1;
 
 const GS_DEV_FLAG_LISTEN_ONLY = 0x00001;
+const GS_DEV_FLAG_LOOP_BACK = 0x00002;
 /* GS_CAN_FEATURE_HW_TIMESTAMP / GS_CAN_MODE_HW_TIMESTAMP share this bit: gs_usb
  * reports a capability and asks for it with the same numbering. */
 const GS_DEV_FLAG_HW_TIMESTAMP = 1 << 4;
@@ -561,6 +562,7 @@ class GsUsbAdapter extends XCanInterface {
                     fd: true,
                     brs: true,
                     listenOnly: true,
+                    loopback: true,
                     termination: true
                 }
             });
@@ -722,6 +724,10 @@ class GsUsbAdapter extends XCanInterface {
 
         if (config.listenOnly) {
             modeFlags |= GS_DEV_FLAG_LISTEN_ONLY;
+        }
+
+        if (config.loopback) {
+            modeFlags |= GS_DEV_FLAG_LOOP_BACK;
         }
 
         // 5) Optional termination request: only when the device advertises the
@@ -918,6 +924,7 @@ class GsUsbAdapter extends XCanInterface {
                 fd: !!(caps.feature & GS_DEV_FLAG_CAN_FD),
                 brs: !!(caps.feature & GS_DEV_FLAG_BIT_TIMING_FD),
                 listenOnly: !!(caps.feature & GS_DEV_FLAG_LISTEN_ONLY),
+                loopback: !!(caps.feature & GS_DEV_FLAG_LOOP_BACK),
                 termination: !!(caps.feature & GS_DEV_FLAG_TERMINATION)
             }
         });

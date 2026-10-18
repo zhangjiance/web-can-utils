@@ -83,6 +83,7 @@ class XCanConfig {
         nominalBitrate = 500000,
         dataBitrate = 2000000,
         listenOnly = false,
+        loopback = false,
         fdMode = true,
         termination = false,
         customTiming = null
@@ -91,6 +92,7 @@ class XCanConfig {
         this.nominalBitrate = nominalBitrate;
         this.dataBitrate = dataBitrate;
         this.listenOnly = listenOnly;
+        this.loopback = loopback;
         this.fdMode = fdMode;
         this.termination = termination;
         this.customTiming = customTiming;
