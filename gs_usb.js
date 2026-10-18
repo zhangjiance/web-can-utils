@@ -295,8 +295,9 @@ const LEN2DLC = [
  *     data[6] TX error counter       data[7] RX error counter
  *
  * The names below are can-utils' (lib.c: error_classes[], controller_problems[],
- * protocol_violation_types[], protocol_violation_locations[]) so a decoded row
- * reads like what `candump -e "canX,#FFFFFFFF"` prints for the same bus.
+ * protocol_violation_types[], protocol_violation_locations[]) so a decoded
+ * status carries the same vocabulary `candump -e "canX,#FFFFFFFF"` uses.
+ * app.js then renders it in a shorter, labelled form for the table.
  */
 const CAN_ERR_CLASS_MASK = 0x1fffffff;
 

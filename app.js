@@ -674,13 +674,16 @@ import "./gs_usb.js";
    * the detail holds the error counters, which move on every event, and a key
    * that moves would give every event a row of its own. */
   function upsertStatusRow(status) {
-    const classes = Array.isArray(status?.classes) && status.classes.length
-      ? status.classes
-      : (status?.busoff ? ["bus-off"] : []);
-    const type = classes.length ? classes.join("+") : (status?.type || "error");
-    const text = describeStatus(status);
+    const classes = statusClasses(status);
+    /* The row key keeps the full class names; only what is displayed is
+     * shortened, so an abbreviation change cannot merge two different rows. */
+    const classKey = classes.length ? classes.join("+") : (status?.type || "error");
+    const type = classes.length
+      ? classes.map((name) => ERROR_CLASS_SHORT[name] || name).join("+")
+      : classKey;
+    const detail = describeStatus(status);
     const channel = Number(status?.channel);
-    const key = `err-${Number.isFinite(channel) ? channel : "-"}-${type}`;
+    const key = `err-${Number.isFinite(channel) ? channel : "-"}-${classKey}`;
 
     const cur = state.rxSummaryMap.get(key) || {
       key,
@@ -688,7 +691,8 @@ import "./gs_usb.js";
       id: null,
       type,
       length: 0,
-      data: text,
+      data: detail.text,
+      hint: detail.hint,
       dataBytes: [],
       cycle: "-",
       count: 0,
@@ -697,7 +701,8 @@ import "./gs_usb.js";
     };
 
     cur.type = type;
-    cur.data = text;                        /* the latest detail wins */
+    cur.data = detail.text;                 /* the latest detail wins */
+    cur.hint = detail.hint;
     cur.count += 1;
 
     const ts = Number(status?.timestamp);
@@ -712,35 +717,123 @@ import "./gs_usb.js";
     scheduleRxSummaryRender();
   }
 
-  /* One error status in the shape can-utils prints an error frame in
-   * (snprintf_can_error_frame(), lib.c): a group per error class with that
-   * class' payload in braces, comma separated.  A row here can then be compared
-   * one to one with `candump -e "canX,#FFFFFFFF"` on the same bus. */
+  /* TYPE column: the can-utils class names shortened to the CAN_ERR_* suffix
+   * the kernel uses, so a frame that reports several classes still fits. */
+  const ERROR_CLASS_SHORT = {
+    "tx-timeout": "TXTIMEOUT",
+    "lost-arbitration": "LOSTARB",
+    "controller-problem": "CTRL",
+    "protocol-violation": "PROT",
+    "transceiver-status": "TRX",
+    "no-acknowledgement-on-tx": "ACK",
+    "bus-off": "BUSOFF",
+    "bus-error": "BUSERR",
+    "restarted-after-bus-off": "RESTARTED",
+    "error-counter-tx-rx": "CNT"
+  };
+
+  function statusClasses(status) {
+    if (Array.isArray(status?.classes) && status.classes.length) {
+      return status.classes;
+    }
+    return status?.busoff ? ["bus-off"] : [];
+  }
+
+  /* Detail cell of an ERR row: only what the payload actually reported, as
+   * short `key: value` fields.  Classes without a payload (ACK, bus-error,
+   * ...) are already in the TYPE column, so repeating them here would just be
+   * noise - that is what made the old can-utils string hard to read
+   * (`protocol-violation{{}{}}`).  `hint` is the same information as a
+   * sentence and becomes the cell's hover text. */
   function describeStatus(status) {
-    if (!status) return "error";
+    if (!status) return { text: "error", hint: "Error frame" };
 
-    const classes = Array.isArray(status.classes) ? status.classes : [];
-    const parts = [];
+    const classes = statusClasses(status);
+    if (!classes.length) {
+      const text = status.type || "error frame";
+      return { text, hint: text };
+    }
 
-    if (classes.includes("lost-arbitration")) {
-      parts.push(`lost-arbitration{{at bit ${status.arbitrationBit | 0}}}`);
+    const ctrl = Array.isArray(status.ctrl) ? status.ctrl : [];
+    const prot = Array.isArray(status.prot) ? status.prot : [];
+    const location = status.location && status.location !== "unspecified"
+      ? status.location : "";
+    const tx = status.txErrorCounter | 0;
+    const rx = status.rxErrorCounter | 0;
+
+    const fields = [];
+    const hints = [];
+    let countersDone = false;
+
+    /* CAN_ERR_CNT marks the counters as valid; without it a device may still
+     * fill them in, and can-utils prints them either way (lib.c:873). */
+    function addCounters() {
+      if (countersDone) return;
+      countersDone = true;
+      fields.push(`tx-err: ${tx}`, `rx-err: ${rx}`);
+      hints.push(`Error counters: TX ${tx}, RX ${rx}`);
     }
-    if (classes.includes("controller-problem")) {
-      parts.push(`controller-problem{${(status.ctrl || []).join(",")}}`);
+
+    for (const name of classes) {
+      switch (name) {
+        case "lost-arbitration":
+          fields.push(`arb-lost: bit ${status.arbitrationBit | 0}`);
+          hints.push(`Lost arbitration at bit ${status.arbitrationBit | 0}`);
+          break;
+        case "controller-problem":
+          if (ctrl.length) {
+            fields.push(`ctrl: ${ctrl.join(", ")}`);
+            hints.push(`Controller problem: ${ctrl.join(", ")}`);
+          } else {
+            hints.push("Controller problem (no detail)");
+          }
+          break;
+        case "protocol-violation":
+          if (prot.length) {
+            fields.push(location
+              ? `prot: ${prot.join(", ")} @ ${location}`
+              : `prot: ${prot.join(", ")}`);
+            hints.push(`Protocol violation: ${prot.join(", ")}${location ? ` at ${location}` : ""}`);
+          } else if (location) {
+            fields.push(`prot: at ${location}`);
+            hints.push(`Protocol violation at ${location}`);
+          } else {
+            /* data[2] and data[3] are both empty: the class bit is all we know */
+            hints.push("Protocol violation (no detail)");
+          }
+          break;
+        case "transceiver-status":
+          hints.push("Transceiver status");
+          break;
+        case "no-acknowledgement-on-tx":
+          hints.push("No acknowledgement on TX");
+          break;
+        case "bus-off":
+          hints.push("Bus off");
+          break;
+        case "bus-error":
+          hints.push("Bus error");
+          break;
+        case "restarted-after-bus-off":
+          hints.push("Restarted after bus off");
+          break;
+        case "tx-timeout":
+          hints.push("TX timeout");
+          break;
+        case "error-counter-tx-rx":
+          addCounters();
+          break;
+        default:
+          hints.push(name);
+      }
     }
-    if (classes.includes("protocol-violation")) {
-      const location = status.location ? `{${status.location}}` : "{}";
-      parts.push(`protocol-violation{{${(status.prot || []).join(",")}}${location}}`);
-    }
-    /* The counters belong with the event even when the device does not set
-     * CAN_ERR_CNT - can-utils prints them either way (lib.c:873). */
-    if (status.txErrorCounter || status.rxErrorCounter) {
-      parts.push(`error-counter-tx-rx{{${status.txErrorCounter | 0}}{${status.rxErrorCounter | 0}}}`);
-    }
-    if (parts.length === 0) {
-      parts.push(classes.length ? classes.join(",") : (status.type || "error frame"));
-    }
-    return parts.join(",");
+
+    if (tx || rx) addCounters();
+
+    return {
+      text: fields.length ? fields.join(" | ") : "\u00b7",
+      hint: hints.join(". ") + "."
+    };
   }
 
   /* The ESI bit is a property of the received frame (the controller's error
@@ -940,7 +1033,7 @@ import "./gs_usb.js";
        * that flips every other frame would otherwise glow without pause. */
 
       dataCell.className = "data-cell";
-      dataCell.title = r.data;
+      dataCell.title = isStatus ? (r.hint || r.data) : r.data;
 
       if (isStatus) {
         node.byteSpans = [];

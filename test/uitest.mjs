@@ -651,12 +651,31 @@ check("channels show pending until applied", /pending/.test(rowText(1)), rowText
 
 console.log("== RX + ERR rows, CLR ==");
 device.queueRx(rxFrame(1, 0x555, [0xde, 0xad]));
-device.queueRx(rxFrame(1, 0x20000000 | 0x123, []));
+/* the row from the bug report: CTRL+PROT+ACK+BUSERR+CNT, tx-error-passive,
+ * protocol bits and location both empty, counters 128/0 */
+device.queueRx(rxFrame(1, 0x20000000 | 0x2AC,
+    [0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00]));
 const rxCells = () => Array.from(window.document.querySelectorAll("#rxSummaryBody tr"))
     .map((tr) => Array.from(tr.children).map((td) => td.textContent.trim()));
+const errRow = () => Array.from(window.document.querySelectorAll("#rxSummaryBody tr"))
+    .find((tr) => tr.children[1] && tr.children[1].textContent.trim() === "ERR");
 await waitFor("rx rows", () => rxCells().length >= 2, 1000);
 check("frame row and ERR row both shown",
     rxCells().some((c) => c[1] === "ERR") && rxCells().some((c) => c[1] === "0x555"), JSON.stringify(rxCells()));
+check("ERR TYPE uses the short class names",
+    !!errRow() && errRow().children[2].textContent.trim() === "CTRL+PROT+ACK+BUSERR+CNT",
+    errRow() && errRow().children[2].textContent);
+check("ERR detail is labelled and drops the empty protocol group",
+    !!errRow() && errRow().children[4].textContent.trim() === "ctrl: tx-error-passive | tx-err: 128 | rx-err: 0",
+    errRow() && errRow().children[4].textContent);
+const errHint = errRow() && errRow().children[4].title;
+check("ERR hover explains the frame in words",
+    /Controller problem: tx-error-passive/.test(errHint)
+    && /Protocol violation \(no detail\)/.test(errHint)
+    && /No acknowledgement on TX/.test(errHint)
+    && /Bus error/.test(errHint)
+    && /Error counters: TX 128, RX 0/.test(errHint),
+    errHint);
 click("btnClearRx");
 await sleep(30);
 check("CLR empties the RX list", rxCells().length === 0, JSON.stringify(rxCells()));
