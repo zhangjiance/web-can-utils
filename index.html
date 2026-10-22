@@ -815,13 +815,25 @@
      * on one line on a desktop. */
     #connectModal { width: min(920px, calc(100vw - 24px)); }
     /* The left half (CH + the five ticks) is split evenly between those six
-     * columns; Timing and State split the right half evenly.  A hidden tick
-     * column (device without that feature) is removed from the row, and the
-     * two flexible columns on the right take its share. */
+     * columns; the right half is Timing plus State.  A hidden tick column
+     * (device without that feature) is removed from the row. */
     #connectModal .channel-table { table-layout: fixed; }
     #connectModal .channel-table th.half-a { width: 8.3333%; }
     #connectModal .channel-table th:last-child,
     #connectModal .channel-table td:last-child { text-align: right; }
+    /* Desktop: Timing holds the select plus two ⚙ buttons, State is one short
+     * word.  Keeping every width in percent matters: when a tick column is
+     * hidden, the freed width is then shared by all columns.  Giving Timing
+     * the slack instead stretched its select across the whole dialog.  The
+     * state cell may paint left into its own blank padding when it reads
+     * "pending stop ⚠", so a narrow column costs nothing. */
+    @media (min-width: 921px) {
+      #connectModal .channel-table th.half-a { width: 9%; }
+      #connectModal .channel-table th#thTiming { width: 28%; }
+      #connectModal .channel-table th#thState { width: 8%; }
+      #connectModal .channel-table th:last-child,
+      #connectModal .channel-table td:last-child { overflow: visible; }
+    }
     #connectModal .row > .field { min-width: 0; }
 
     /* Tick columns hold one checkbox each.  The fixed table layout gives all
