@@ -41,6 +41,10 @@ import "./gs_usb.js";
   const PRESET_MAX_BITRATE_ERR = 5e-4;   /* 0.05 % */
   const PRESET_MAX_SP_ERR = 0.10;        /* 10 percentage points */
 
+  /* gs_device_tdc_mode bits (candleLight extension). */
+  const GS_TDC_MODE_OFF = 1;
+  const GS_TDC_MODE_AUTO = 2;
+
   const RX_RENDER_THROTTLE_MS = 80;
   const TX_RENDER_THROTTLE_MS = 80;
   /* Upper bound for deferring TX-table repaints while a pointer is held. */
@@ -92,6 +96,12 @@ import "./gs_usb.js";
     nomResult: document.getElementById("nomResult"),
     dataPhase: document.getElementById("dataPhase"),
     dataResult: document.getElementById("dataResult"),
+    tdcPhase: document.getElementById("tdcPhase"),
+    tdcMode: document.getElementById("tdcMode"),
+    tdcTdco: document.getElementById("tdcTdco"),
+    tdcTdcf: document.getElementById("tdcTdcf"),
+    tdcInfo: document.getElementById("tdcInfo"),
+    btnTdcRead: document.getElementById("btnTdcRead"),
     btnTimingCancel: document.getElementById("btnTimingCancel"),
     btnApplyPending: document.getElementById("btnApplyPending"),
     nomBitrate: document.getElementById("nomBitrate"),
@@ -1910,7 +1920,7 @@ import "./gs_usb.js";
       termCell.style.display = showTerm ? "" : "none";
       if (showTerm) {
         /* the device tells us what its terminators are doing right now
-         * (GS_USB_BREQ_GET_CAN_RESISTER_ENABLE_STATE); the tick is the intent */
+         * (GS_USB_BREQ_GET_TERMINATION); the tick is the intent */
         const reported = state.adapter && state.adapter.terminationState
           ? state.adapter.terminationState[ch] : undefined;
         const termTitle = reported === undefined || reported === null
@@ -2024,6 +2034,7 @@ import "./gs_usb.js";
         tt.presetKey = timingSelect.value;
         tt.nominal = null;
         tt.data = null;
+        tt.tdc = { mode: "default", tdco: null, tdcf: 0 };
         renderChannelRows();
         renderTimingSummary();
       });
@@ -2167,6 +2178,10 @@ import "./gs_usb.js";
       cfg.termination = snap ? !!snap.termination : !!setting.termination;
     }
 
+    if (fdMode && caps.tdc) {
+      cfg.tdc = t.tdc ? { ...t.tdc } : { mode: "default", tdco: null, tdcf: 0 };
+    }
+
     return new XCanConfig(cfg);
   }
 
@@ -2194,6 +2209,7 @@ import "./gs_usb.js";
       presetKey: t.presetKey,
       nominal: t.nominal ? { ...t.nominal } : null,
       data: t.data ? { ...t.data } : null,
+      tdc: t.tdc ? { ...t.tdc } : { mode: "default", tdco: null, tdcf: 0 },
       query: {
         nominal: { ...t.query.nominal },
         data: { ...t.query.data }
@@ -2257,6 +2273,7 @@ import "./gs_usb.js";
           : defaultPresetKey(fdMode),
         nominal: null,
         data: null,
+        tdc: { mode: "default", tdco: null, tdcf: 0 },
         query: {
           nominal: { bitrate: 500, sample: 80 },
           data: { bitrate: 2000, sample: 80 }
@@ -2411,7 +2428,12 @@ import "./gs_usb.js";
     const short = (r) => r
       ? `${fmtBitrateShort(r.bitrateHz)}@${fmtSamplePoint(r.samplePoint)}`
       : "?";
-    const detail = [n, d].filter(Boolean).map((r) => fmtResult(r)).join("\n");
+    const detailLines = [n, d].filter(Boolean).map((r) => fmtResult(r));
+    const tdc = t.tdc;
+    if (tdc && tdc.mode && tdc.mode !== "default") {
+      detailLines.push(`TDC ${tdc.mode}${tdc.mode === "auto" ? ` (tdco ${tdc.tdco ?? "auto"})` : ""}`);
+    }
+    const detail = detailLines.join("\n");
     const custom = !!(t.nominal || t.data) ? " custom" : "";
     return {
       text: `${short(n)}${d ? ` / ${short(d)}` : ""}${custom}`,
@@ -2425,6 +2447,7 @@ import "./gs_usb.js";
       presetKey: timing.presetKey,
       nominal: timing.nominal,
       data: timing.data,
+      tdc: timing.tdc || null,
       termination: !!termination,
       fdMode: !!fdMode,
       listenOnly: !!listenOnly,
@@ -2571,6 +2594,7 @@ import "./gs_usb.js";
       t.presetKey = key;
       t.nominal = null;
       t.data = null;
+      t.tdc = { mode: "default", tdco: null, tdcf: 0 };
     }
     renderChannelRows();
     renderTimingSummary();
@@ -2693,11 +2717,102 @@ import "./gs_usb.js";
     }
   }
 
+  function tdcModeLabel(mode) {
+    if (mode & GS_TDC_MODE_AUTO) return "AUTO";
+    if (mode & GS_TDC_MODE_OFF) return "OFF";
+    return `0x${(mode >>> 0).toString(16)}`;
+  }
+
+  /* TDC is per channel and only exists in the FD data phase.  "default" means
+   * no SET_TDC request; the firmware applies its own policy. */
+  function renderTdcControls() {
+    const adapter = state.adapter;
+    const caps = adapter?.tdcConst || null;
+    const capsOk = !!caps && !!adapter?.deviceInfo?.capabilities?.tdc;
+    const fdMode = !channelSetting(state.timingChannel).classic &&
+                   !!adapter?.deviceInfo?.capabilities?.fd;
+    const show = state.timingPhase === "data" && fdMode && capsOk;
+    ui.tdcPhase.style.display = show ? "" : "none";
+    if (!show) {
+      return;
+    }
+
+    const t = draftTiming();
+    if (!t.tdc) {
+      t.tdc = { mode: "default", tdco: null, tdcf: 0 };
+    }
+    const tdc = t.tdc;
+    const res = timingResult(state.timingChannel, "data", t);
+    const values = res?.values || null;
+    const bitrate = res?.bitrateHz || 0;
+    const autoTdco = values ? (1 + values.seg1) * values.brp : null;
+
+    ui.tdcMode.value = tdc.mode || "default";
+    const autoOption = Array.from(ui.tdcMode.options).find((o) => o.value === "auto");
+    if (autoOption) {
+      autoOption.disabled = !(caps.mode & GS_TDC_MODE_AUTO);
+    }
+
+    const auto = tdc.mode === "auto";
+    ui.tdcTdco.disabled = !auto;
+    ui.tdcTdcf.disabled = !auto;
+    ui.tdcTdco.value = tdc.tdco === null || tdc.tdco === undefined ? "" : String(tdc.tdco);
+    ui.tdcTdco.placeholder = autoTdco === null ? "auto" : String(autoTdco);
+    ui.tdcTdcf.value = String(tdc.tdcf ?? 0);
+    ui.btnTdcRead.disabled = typeof adapter?.getTdc !== "function";
+
+    const notes = [];
+    if (tdc.mode === "default") {
+      notes.push("firmware decides (M_CAN: auto for data brp 1/2; CH32: data >= 2M and brp <= 2)");
+    } else if (tdc.mode === "off") {
+      notes.push("TDC disabled");
+    } else if (tdc.mode === "auto") {
+      const tdco = tdc.tdco === null || tdc.tdco === undefined ? autoTdco : Number(tdc.tdco);
+      notes.push(`auto TDCO ${tdco ?? "?"} = (1 + tseg1) x brp, range ${caps.tdco_min}..${caps.tdco_max}`);
+      if (!(caps.mode & GS_TDC_MODE_AUTO)) {
+        notes.push("auto mode not supported by this device");
+      }
+      if (values && values.brp > 2) {
+        notes.push("data brp > 2: TDC cannot be used");
+      } else if (bitrate && bitrate < 2000000) {
+        notes.push("data < 2 Mbit/s: firmware keeps TDC off");
+      }
+    } else {
+      notes.push(`TDC mode ${tdc.mode}`);
+    }
+    ui.tdcInfo.textContent = notes.join(" · ");
+    ui.tdcInfo.title = `TDCO range ${caps.tdco_min}..${caps.tdco_max}, TDCF range `
+      + `${caps.tdcf_min}..${caps.tdcf_max}, modes ${tdcModeLabel(caps.mode)}`;
+  }
+
+  function updateTdcDraft(patch) {
+    const t = draftTiming();
+    const tdc = t.tdc || { mode: "default", tdco: null, tdcf: 0 };
+    t.tdc = { ...tdc, ...patch };
+    renderTdcControls();
+  }
+
+  async function readTdc() {
+    if (!state.adapter || typeof state.adapter.getTdc !== "function") {
+      return;
+    }
+    try {
+      const r = await state.adapter.getTdc(state.timingChannel);
+      ui.tdcInfo.textContent = `TDCV ${r.tdcv} mtq · TDCO ${r.tdco} · TDCF ${r.tdcf}`
+        + ` · mode ${tdcModeLabel(r.mode)}`;
+      ui.tdcInfo.title = "TDCV is the measured transmitter delay (secondary sample point, "
+        + "minus the programmed offset). It is 0 until a BRS frame has been sent.";
+    } catch (err) {
+      setStateText(`TDC read failed: ${err?.message || err}`, "danger");
+    }
+  }
+
   function useTimingCandidate(phase, cand) {
     const t = draftTiming();
     t[phase] = { brp: cand.brp, seg1: cand.seg1, seg2: cand.seg2, sjw: cand.sjw };
     renderTimingTable(phase);
     renderTimingResults();
+    if (phase === "data") renderTdcControls();
   }
 
   function readTimingQuery(phase) {
@@ -2723,6 +2838,7 @@ import "./gs_usb.js";
     autoSelectTop("data");
     renderTimingTable("data");
     renderTimingResults();
+    renderTdcControls();
   });
 
   function renderTimingDialog() {
@@ -2746,6 +2862,7 @@ import "./gs_usb.js";
 
     renderTimingTable(state.timingPhase);
     renderTimingResults();
+    renderTdcControls();
   }
 
   /* The timing dialog is a sub-panel of the device panel: it opens on top of it
@@ -3450,6 +3567,19 @@ import "./gs_usb.js";
     for (const el of [ui.dataBitrate, ui.dataSample]) {
       el.addEventListener("input", refreshData);
     }
+
+    ui.tdcMode.addEventListener("change", () => updateTdcDraft({ mode: ui.tdcMode.value }));
+    ui.tdcTdco.addEventListener("input", () => {
+      const v = ui.tdcTdco.value.trim();
+      const n = Number(v);
+      updateTdcDraft({ tdco: v === "" ? null : (Number.isFinite(n) ? n : v) });
+    });
+    ui.tdcTdcf.addEventListener("input", () => {
+      const v = ui.tdcTdcf.value.trim();
+      const n = Number(v);
+      updateTdcDraft({ tdcf: v === "" ? 0 : (Number.isFinite(n) ? n : v) });
+    });
+    ui.btnTdcRead.addEventListener("click", () => { readTdc().catch(() => {}); });
 
     ui.preset.addEventListener("change", () => {
       /* the panel select is "apply to all" - it also updates the summary */

@@ -13,10 +13,10 @@ import { JSDOM } from "jsdom";
 const CAN = process.env.CAN_DIR || new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const GS_REQ = {
     HOST_FORMAT: 0, BIT_TIMING: 1, MODE: 2, BT_CONST: 4, DEVICE_CONFIG: 5,
-    BIT_TIMING_FD: 10, BT_CONST_EXT: 11, TERMINATION: 12, LAST_ERROR: 22,
-    RESISTER_STATE: 15, RESISTER_SET: 16, INTERFACE_ENDPOINT: 17,
+    BIT_TIMING_FD: 10, BT_CONST_EXT: 11, TERMINATION: 12, GET_TERMINATION: 13,
+    GET_TDC_CONST: 17, SET_TDC: 18, GET_TDC: 19, LAST_ERROR: 22,
 };
-const FEATURE = 0x0001 | 0x0002 | 0x0010 | 0x0080 | 0x0100 | 0x0400 | 0x0800; // LISTEN_ONLY|LOOP_BACK|HW_TS|PAD|FD|BT_CONST_EXT|TERMINATION
+const FEATURE = 0x0001 | 0x0002 | 0x0010 | 0x0080 | 0x0100 | 0x0400 | 0x0800 | 0x20000; // LISTEN_ONLY|LOOP_BACK|HW_TS|PAD|FD|BT_CONST_EXT|TERMINATION|TDC
 
 class FakeUsbDevice {
     constructor(icount) {
@@ -31,7 +31,8 @@ class FakeUsbDevice {
         this.inCalls = 0;
         this.rxQueue = [];
         this.claimed = [];
-        this.termination = false;      /* what the vendor request 15 reports */
+        this.termination = false;      /* what GET_TERMINATION reports */
+        this.tdc = { tdcv: 0, tdco: 0, tdcf: 0, mode: 1 }; /* OFF until SET_TDC */
         this._config = {
             interfaces: [{
                 interfaceNumber: 0,
@@ -77,8 +78,24 @@ class FakeUsbDevice {
         if (setup.request === GS_REQ.LAST_ERROR) {
             return { status: "ok", data: new DataView(new Uint8Array([2]).buffer) };
         }
-        if (setup.request === GS_REQ.RESISTER_STATE) {
-            return { status: "ok", data: new DataView(new Uint8Array([this.termination ? 1 : 0]).buffer) };
+        if (setup.request === GS_REQ.GET_TERMINATION) {
+            const b = new Uint8Array(4);
+            new DataView(b.buffer).setUint32(0, this.termination ? 1 : 0, true);
+            return { status: "ok", data: new DataView(b.buffer) };
+        }
+        if (setup.request === GS_REQ.GET_TDC_CONST) {
+            const b = new Uint8Array(28); const dv = new DataView(b.buffer);
+            /* tdcv 0..255, tdco 0..127, tdcf 0..127, OFF|AUTO */
+            [0, 255, 0, 127, 0, 127, 3].forEach((v, i) => this._u32(dv, i * 4, v));
+            return { status: "ok", data: new DataView(b.buffer) };
+        }
+        if (setup.request === GS_REQ.GET_TDC) {
+            const b = new Uint8Array(16); const dv = new DataView(b.buffer);
+            this._u32(dv, 0, this.tdc.tdcv);
+            this._u32(dv, 4, this.tdc.tdco);
+            this._u32(dv, 8, this.tdc.tdcf);
+            this._u32(dv, 12, this.tdc.mode);
+            return { status: "ok", data: new DataView(b.buffer) };
         }
         return { status: "stall", data: null };
     }
@@ -92,8 +109,14 @@ class FakeUsbDevice {
         if (setup.request === GS_REQ.TERMINATION && bytes && bytes.byteLength >= 4) {
             this.termination = new DataView(bytes.buffer).getUint32(0, true) !== 0;
         }
-        if (setup.request === GS_REQ.RESISTER_SET && bytes && bytes.byteLength >= 1) {
-            this.termination = bytes[0] !== 0;
+        if (setup.request === GS_REQ.SET_TDC && bytes && bytes.byteLength >= 16) {
+            const dv = new DataView(bytes.buffer);
+            this.tdc = {
+                tdcv: dv.getUint32(0, true),
+                tdco: dv.getUint32(4, true),
+                tdcf: dv.getUint32(8, true),
+                mode: dv.getUint32(12, true),
+            };
         }
         return { status: "ok" };
     }
@@ -599,6 +622,20 @@ const pickData = rowCells(dataRowsNow()[1]);
 dataRowsNow()[1].click();
 await sleep(20);
 check("data row selected", new RegExp(`tseg1 ${pickData[1]}`).test($("dataResult").textContent), $("dataResult").textContent);
+
+console.log("== TDC in the data phase ==");
+check("TDC controls are shown for FD", $("tdcPhase").style.display !== "none",
+    $("tdcPhase").style.display);
+const expectedTdco = (1 + Number(pickData[1])) * Number(pickData[0]);
+$("tdcMode").value = "auto";
+$("tdcMode").dispatchEvent(new window.Event("change", { bubbles: true }));
+await sleep(20);
+check("auto TDCO follows the selected data timing",
+    Number($("tdcTdco").placeholder) === expectedTdco,
+    `${$("tdcTdco").placeholder} vs ${expectedTdco}`);
+check("TDC info explains the offset", /auto TDCO/.test($("tdcInfo").textContent),
+    $("tdcInfo").textContent);
+
 click("btnTimingOk");
 await sleep(30);
 
@@ -628,6 +665,9 @@ check("Apply programmed the picked arbitration timing",
 check("Apply programmed the picked data timing",
     !!dataReq && timingOf(dataReq).seg1 === Number(pickData[1]),
     `${JSON.stringify(dataReq && timingOf(dataReq))} vs ${JSON.stringify(pickData)}`);
+check("Apply sent the TDC auto configuration",
+    device.tdc.mode === 2 && device.tdc.tdco === expectedTdco && device.tdc.tdcv === 0,
+    JSON.stringify(device.tdc));
 check("CH2 running again (no pending)", !/pending/.test(rowText(1)), rowText(1));
 
 console.log("== per-channel Classic removes only that channel's data gear ==");
@@ -1097,13 +1137,13 @@ check("lines are numbered, not timestamped",
     dbgLines().slice(0, 3).map((l) => l.querySelector(".dbg-time").textContent).join(" "));
 check("the clock moved into the hover",
     /^\d\d:\d\d:\d\d\.\d\d\d\n/.test(dbgLines()[0].title), dbgLines()[0].title.slice(0, 30));
-check("the vendor resistor-state request is read and decoded",
-    /GET_RESISTER_STATE/.test(dbgText()) && /off/.test(dbgText()),
-    dbgLines().filter((l) => /GET_RESISTER_STATE/.test(l.textContent)).slice(0, 1).map((l) => l.textContent).join(""));
+check("the device's termination state is read and decoded",
+    /GET_TERMINATION/.test(dbgText()) && /off/.test(dbgText()),
+    dbgLines().filter((l) => /GET_TERMINATION/.test(l.textContent)).slice(0, 1).map((l) => l.textContent).join(""));
 check("the hover names the constant it maps to",
-    /GS_USB_BREQ_GET_CAN_RESISTER_ENABLE_STATE/.test(
-        dbgLines().find((l) => labelOf(l) === "GET_RESISTER_STATE").title),
-    dbgLines().find((l) => labelOf(l) === "GET_RESISTER_STATE").title.replace(/\n/g, " | "));
+    /GS_USB_BREQ_GET_TERMINATION/.test(
+        dbgLines().find((l) => labelOf(l) === "GET_TERMINATION").title),
+    dbgLines().find((l) => labelOf(l) === "GET_TERMINATION").title.replace(/\n/g, " | "));
 
 
 /* one short line per interaction, the decode only on hover */
@@ -1172,7 +1212,11 @@ const txLines = dbgLines().filter((l) => labelOf(l) === "bulk TX frame");
 check("and keeps collecting while hidden", txLines.length >= 2, `${txLines.length} line(s)`);
 
 console.log("== control-transfer decoding ==");
-const { GsUsbAdapter, GS_REQ_SET_INTERFACENUMBER_ENDPOINT } = await import(`${CAN}/gs_usb.js`);
+const {
+    GsUsbAdapter,
+    GS_REQ_GET_TDC_CONST,
+    GS_REQ_SET_TDC,
+} = await import(`${CAN}/gs_usb.js`);
 const decoder = new GsUsbAdapter();
 const u32bytes = (...values) => {
     const b = new Uint8Array(values.length * 4);
@@ -1180,12 +1224,16 @@ const u32bytes = (...values) => {
     values.forEach((v, i) => dv.setUint32(i * 4, v >>> 0, true));
     return b;
 };
-const endpointDecode = decoder._describeControl(GS_REQ_SET_INTERFACENUMBER_ENDPOINT, 2, 1, null);
-check("the endpoint hint decodes channel and interface",
-    /CH3 interface 1/.test(endpointDecode.brief)
-    && /GS_USB_BREQ_SET_INTERFACENUMBER_ENDPOINT/.test(endpointDecode.full)
-    && /wValue=2/.test(endpointDecode.full),
-    `${endpointDecode.brief} | ${endpointDecode.full.replace(/\n/g, " | ")}`);
+const tdcSetDecode = decoder._describeControl(GS_REQ_SET_TDC, 2, 0, u32bytes(0, 42, 4, 2));
+check("SET_TDC decodes mode and offset",
+    /mode AUTO/.test(tdcSetDecode.brief) && /tdco=42/.test(tdcSetDecode.full)
+    && /mode=AUTO/.test(tdcSetDecode.full),
+    `${tdcSetDecode.brief} | ${tdcSetDecode.full.replace(/\n/g, " | ")}`);
+const tdcConstDecode = decoder._describeControl(GS_REQ_GET_TDC_CONST, 0, 0,
+    u32bytes(0, 255, 0, 127, 0, 127, 3));
+check("GET_TDC_CONST decodes ranges and modes",
+    /tdco 0\.\.127/.test(tdcConstDecode.full) && /OFF\\|AUTO/.test(tdcConstDecode.full),
+    tdcConstDecode.full.replace(/\n/g, " | "));
 
 decoder.capClassic = { fclk_can: 80000000 };
 const timingDecode = decoder._describeControl(GS_REQ.BIT_TIMING, 1,

@@ -86,7 +86,8 @@ class XCanConfig {
         loopback = false,
         fdMode = true,
         termination = false,
-        customTiming = null
+        customTiming = null,
+        tdc = null
     } = {}) {
         this.channel = channel;
         this.nominalBitrate = nominalBitrate;
@@ -96,6 +97,7 @@ class XCanConfig {
         this.fdMode = fdMode;
         this.termination = termination;
         this.customTiming = customTiming;
+        this.tdc = tdc;
     }
 }
 

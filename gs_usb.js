@@ -52,9 +52,9 @@ const GS_REQ_GET_CAPABILITIES_FD = 11;
 const GS_REQ_SET_TERMINATION = 12;
 const GS_REQ_GET_TERMINATION = 13;
 const GS_REQ_GET_STATE = 14;
-const GS_REQ_GET_CAN_RESISTER_ENABLE_STATE = 15;
-const GS_REQ_SET_CAN_RESISTER_ENABLE_STATE = 16;
-const GS_REQ_SET_INTERFACENUMBER_ENDPOINT = 17;
+const GS_REQ_GET_TDC_CONST = 17;
+const GS_REQ_SET_TDC = 18;
+const GS_REQ_GET_TDC = 19;
 
 const ELM_REQ_GET_LAST_ERROR = 22;
 
@@ -74,9 +74,9 @@ const GS_REQ_NAMES = {
     [GS_REQ_SET_TERMINATION]: "SET_TERMINATION",
     [GS_REQ_GET_TERMINATION]: "GET_TERMINATION",
     [GS_REQ_GET_STATE]: "GET_STATE",
-    [GS_REQ_GET_CAN_RESISTER_ENABLE_STATE]: "GET_RESISTER_STATE",
-    [GS_REQ_SET_CAN_RESISTER_ENABLE_STATE]: "SET_RESISTER_STATE",
-    [GS_REQ_SET_INTERFACENUMBER_ENDPOINT]: "SET_INTERFACE_ENDPOINT",
+    [GS_REQ_GET_TDC_CONST]: "GET_TDC_CONST",
+    [GS_REQ_SET_TDC]: "SET_TDC",
+    [GS_REQ_GET_TDC]: "GET_TDC",
     [ELM_REQ_GET_LAST_ERROR]: "GET_LAST_ERROR",
 };
 
@@ -94,9 +94,9 @@ const GS_REQ_CANONICAL = {
     [GS_REQ_SET_TERMINATION]: "GS_USB_BREQ_SET_TERMINATION",
     [GS_REQ_GET_TERMINATION]: "GS_USB_BREQ_GET_TERMINATION",
     [GS_REQ_GET_STATE]: "GS_USB_BREQ_GET_STATE",
-    [GS_REQ_GET_CAN_RESISTER_ENABLE_STATE]: "GS_USB_BREQ_GET_CAN_RESISTER_ENABLE_STATE",
-    [GS_REQ_SET_CAN_RESISTER_ENABLE_STATE]: "GS_USB_BREQ_SET_CAN_RESISTER_ENABLE_STATE",
-    [GS_REQ_SET_INTERFACENUMBER_ENDPOINT]: "GS_USB_BREQ_SET_INTERFACENUMBER_ENDPOINT",
+    [GS_REQ_GET_TDC_CONST]: "GS_USB_BREQ_GET_TDC_CONST",
+    [GS_REQ_SET_TDC]: "GS_USB_BREQ_SET_TDC",
+    [GS_REQ_GET_TDC]: "GS_USB_BREQ_GET_TDC",
     [ELM_REQ_GET_LAST_ERROR]: "vendor GET_LAST_ERROR (22)",
 };
 
@@ -115,6 +115,8 @@ const GS_FEATURE_BITS = [
     [1 << 6, "USER_ID"], [1 << 7, "PAD_PKTS_TO_MAX_PKT_SIZE"], [1 << 8, "FD"],
     [1 << 9, "USB_QUIRK_LPC546XX"], [1 << 10, "BT_CONST_EXT"],
     [1 << 11, "TERMINATION"], [1 << 12, "BERR_REPORTING"],
+    [1 << 13, "GET_STATE"], [1 << 16, "FILTER"], [1 << 17, "TDC"],
+    [1 << 18, "BUS_OFF_RECOVERY"],
 ];
 
 const GS_MODE_BITS = [
@@ -201,13 +203,6 @@ function decodeBtTiming(bytes, clock) {
     };
 }
 
-/* One byte terminal resistor state (vendor extension). */
-function decodeResisterState(byte) {
-    return byte
-        ? { brief: "on", full: "state byte 0x01: 120 ohm terminators engaged" }
-        : { brief: "off", full: "state byte 0x00: terminators disengaged" };
-}
-
 /* struct gs_device_termination_state: 0 off, 1 on */
 function decodeTerminationState(bytes) {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -216,6 +211,39 @@ function decodeTerminationState(bytes) {
         brief: state === 1 ? "on" : state === 0 ? "off" : `state ${state}`,
         full: `state=${state} (${state === 1 ? "on" : state === 0 ? "off" : "not supported"})`
             + " · GS_CAN_TERMINATION_STATE_OFF=0 / _ON=1",
+    };
+}
+
+const GS_TDC_MODE_OFF = 1;
+const GS_TDC_MODE_AUTO = 2;
+const GS_TDC_MODE_MANUAL = 4;
+
+function tdcModeName(mode) {
+    const names = [
+        (mode & GS_TDC_MODE_OFF) ? "OFF" : "",
+        (mode & GS_TDC_MODE_AUTO) ? "AUTO" : "",
+        (mode & GS_TDC_MODE_MANUAL) ? "MANUAL" : "",
+    ].filter(Boolean);
+    return names.length ? names.join("|") : `0x${(mode >>> 0).toString(16)}`;
+}
+
+/* struct gs_device_tdc_const: tdcv_min/max, tdco_min/max, tdcf_min/max, mode */
+function decodeTdcConst(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return {
+        brief: `mode ${tdcModeName(u32(dv, 24))}`,
+        full: `tdcv ${u32(dv, 0)}..${u32(dv, 4)} · tdco ${u32(dv, 8)}..${u32(dv, 12)}`
+            + ` · tdcf ${u32(dv, 16)}..${u32(dv, 20)} · mode ${tdcModeName(u32(dv, 24))}`,
+    };
+}
+
+/* struct gs_device_tdc: tdcv, tdco, tdcf, mode */
+function decodeTdc(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return {
+        brief: `mode ${tdcModeName(u32(dv, 12))} tdco ${u32(dv, 4)}`,
+        full: `tdcv=${u32(dv, 0)} tdco=${u32(dv, 4)} tdcf=${u32(dv, 8)}`
+            + ` mode=${tdcModeName(u32(dv, 12))}`,
     };
 }
 
@@ -250,6 +278,7 @@ const GS_DEV_FLAG_HW_TIMESTAMP = 1 << 4;
 const GS_DEV_FLAG_CAN_FD = 0x00100;
 const GS_DEV_FLAG_BIT_TIMING_FD = 0x00400;
 const GS_DEV_FLAG_TERMINATION = 0x00800;
+const GS_DEV_FLAG_TDC = 1 << 17;
 
 // Candlelight legacy frame flags
 const GS_CAN_FLAG_OVERFLOW = 1 << 0;
@@ -470,9 +499,10 @@ class GsUsbAdapter extends XCanInterface {
 
         this.capClassic = null;
         /* host channel -> terminal resistor state the device reported (null when
-         * it does not answer the vendor request) */
+         * it does not answer GET_TERMINATION) */
         this.terminationState = {};
         this.capFd = null;
+        this.tdcConst = null;
     }
 
     get protocolName() {
@@ -568,13 +598,13 @@ class GsUsbAdapter extends XCanInterface {
             });
         }
 
-        /* Read the terminal resistor state up front (vendor request 15): the
-         * panel shows what the hardware is doing as soon as it opens, before
-         * anything is started.  Channels whose board does not answer the vendor
-         * request report null and simply show no state. */
+        /* Read the terminal resistor state up front with the standard
+         * GET_TERMINATION request: the panel shows what the hardware is doing
+         * as soon as it opens, before anything is started.  Channels whose
+         * board does not answer report null and simply show no state. */
         if (this.capClassic && (this.capClassic.feature & GS_DEV_FLAG_TERMINATION)) {
             for (const entry of this.channelMap) {
-                this.terminationState[entry.hostChannel] = await this._readResisterState(entry);
+                this.terminationState[entry.hostChannel] = await this._readTerminationState(entry);
             }
         }
 
@@ -624,6 +654,7 @@ class GsUsbAdapter extends XCanInterface {
         this.channelMap = [];
         this.capClassic = null;
         this.capFd = null;
+        this.tdcConst = null;
     }
 
     /**
@@ -663,6 +694,13 @@ class GsUsbAdapter extends XCanInterface {
                 this.capFd = null;
             }
         }
+        if ((this.capClassic.feature & GS_DEV_FLAG_TDC) && !this.tdcConst) {
+            try {
+                this.tdcConst = await this._getTdcConst(entry);
+            } catch (e) {
+                this.tdcConst = null;
+            }
+        }
 
         // 1) Host format: little-endian marker (0xbeef).  Per device, so the
         //    Linux driver sends wValue = 1 here.
@@ -689,6 +727,7 @@ class GsUsbAdapter extends XCanInterface {
 
         // 4) Configure FD data timing if requested
         let modeFlags = 0;
+        let dataTiming = null;
 
         /* Ask for hardware timestamps when the device offers them.  This flag is
          * what decides the frame layout the device sends: with it every frame
@@ -708,7 +747,7 @@ class GsUsbAdapter extends XCanInterface {
                 throw new Error("Device does not support CAN FD");
             }
             const fdCaps = (this.capFd && this.capFd.time_data) ? this.capFd.time_data : this.capClassic?.time;
-            const dataTiming = this._timingFromCustom(config.customTiming?.data, fdCaps, "data")
+            dataTiming = this._timingFromCustom(config.customTiming?.data, fdCaps, "data")
                 || this._calcBitTiming(
                     this.capFd?.fclk_can || this.capClassic?.fclk_can || 160000000,
                     config.dataBitrate || config.nominalBitrate,
@@ -720,6 +759,14 @@ class GsUsbAdapter extends XCanInterface {
 
             modeFlags |= GS_DEV_FLAG_CAN_FD;
             modeFlags |= GS_DEV_FLAG_BIT_TIMING_FD;
+        }
+
+        /* TDC is configured after the data timing (so the firmware can check
+         * DBRP) and before MODE_START.  "default" leaves it to the firmware. */
+        if (config.fdMode && config.tdc && config.tdc.mode !== "default") {
+            const tdc = this._tdcFromConfig(dataTiming, config.tdc);
+            await this._setTdc(entry, tdc);
+            await this._assertLastError("SET_TDC", entry);
         }
 
         if (config.listenOnly) {
@@ -734,9 +781,9 @@ class GsUsbAdapter extends XCanInterface {
         //    capability (boards without a terminator GPIO do not).
         const hasTermination = !!(this.capClassic.feature & GS_DEV_FLAG_TERMINATION);
         if (hasTermination) {
-            /* The vendor tool reads the state before writing its own; this also
-             * keeps the panel honest if something else changed the hardware. */
-            this.terminationState[entry.hostChannel] = await this._readResisterState(entry);
+            /* Read the standard state before writing our own; this also keeps
+             * the panel honest if something else changed the hardware. */
+            this.terminationState[entry.hostChannel] = await this._readTerminationState(entry);
         }
         if (hasTermination && typeof config.termination === "boolean") {
             try {
@@ -908,6 +955,16 @@ class GsUsbAdapter extends XCanInterface {
                 this.capFd = null;
             }
         }
+
+        /* TDC is a candleLight extension; read its ranges and mode mask before
+         * the UI builds the per-channel timing panel. */
+        if ((caps.feature & GS_DEV_FLAG_TDC) && !this.tdcConst) {
+            try {
+                this.tdcConst = await this._getTdcConst(first);
+            } catch (e) {
+                this.tdcConst = null;
+            }
+        }
         this._publishTimingInfo();
 
         const devVer = this._deviceConfig || null;
@@ -925,7 +982,8 @@ class GsUsbAdapter extends XCanInterface {
                 brs: !!(caps.feature & GS_DEV_FLAG_BIT_TIMING_FD),
                 listenOnly: !!(caps.feature & GS_DEV_FLAG_LISTEN_ONLY),
                 loopback: !!(caps.feature & GS_DEV_FLAG_LOOP_BACK),
-                termination: !!(caps.feature & GS_DEV_FLAG_TERMINATION)
+                termination: !!(caps.feature & GS_DEV_FLAG_TERMINATION),
+                tdc: !!(caps.feature & GS_DEV_FLAG_TDC)
             }
         });
     }
@@ -1048,22 +1106,16 @@ class GsUsbAdapter extends XCanInterface {
                     decoded = decodeTerminationState(bytes);
                 }
                 break;
-            case GS_REQ_GET_CAN_RESISTER_ENABLE_STATE:
-                if (length >= 1) {
-                    decoded = decodeResisterState(bytes[0] !== 0);
+            case GS_REQ_GET_TDC_CONST:
+                if (length >= 28) {
+                    decoded = decodeTdcConst(bytes);
                 }
                 break;
-            case GS_REQ_SET_CAN_RESISTER_ENABLE_STATE:
-                if (length >= 1) {
-                    decoded = decodeResisterState(bytes[0] !== 0);
+            case GS_REQ_SET_TDC:
+            case GS_REQ_GET_TDC:
+                if (length >= 16) {
+                    decoded = decodeTdc(bytes);
                 }
-                break;
-            case GS_REQ_SET_INTERFACENUMBER_ENDPOINT:
-                decoded = {
-                    brief: `CH${value + 1} interface ${index}`,
-                    full: "endpoint hint from the vendor tool (wValue = channel, wIndex = interface);"
-                        + " every interface already owns a bulk in/out pair, so it is only acknowledged",
-                };
                 break;
             case GS_REQ_GET_CAPABILITIES:
             case GS_REQ_GET_CAPABILITIES_FD:
@@ -1229,18 +1281,127 @@ class GsUsbAdapter extends XCanInterface {
         return bytes.map((b) => b.toString(16).padStart(2, "0")).join(".");
     }
 
-    /* GS_USB_BREQ_GET_CAN_RESISTER_ENABLE_STATE: one byte, 1 = terminated. */
-    async _readResisterState(entry) {
+    /* GS_USB_BREQ_GET_TERMINATION: the standard termination state request. */
+    async _readTerminationState(entry) {
         try {
             const data = await this._ctrlIn(
-                GS_REQ_GET_CAN_RESISTER_ENABLE_STATE, entry.hostChannel, 1, entry.interfaceNumber);
-            const bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-            return bytes.byteLength ? bytes[0] !== 0 : null;
+                GS_REQ_GET_TERMINATION, entry.hostChannel, 4, entry.interfaceNumber);
+            if (data.byteLength < 4) {
+                return null;
+            }
+            return data.getUint32(0, true) !== 0;
         } catch (err) {
-            this._trace("in", "ctrl", gsReqName(GS_REQ_GET_CAN_RESISTER_ENABLE_STATE), "not supported",
-                "the board does not answer the vendor resistor-state request, so the state is unknown");
+            this._trace("in", "ctrl", gsReqName(GS_REQ_GET_TERMINATION), "not supported",
+                "the board does not answer GET_TERMINATION, so the state is unknown");
             return null;
         }
+    }
+
+    /* GS_USB_BREQ_GET_TDC_CONST: mode mask + ranges, all in CAN clock periods. */
+    async _getTdcConst(entry) {
+        const data = await this._ctrlIn(
+            GS_REQ_GET_TDC_CONST, entry.hostChannel, 28, entry.interfaceNumber);
+        if (data.byteLength < 28) {
+            throw new Error("short GET_TDC_CONST reply");
+        }
+        return {
+            tdcv_min: data.getUint32(0, true),
+            tdcv_max: data.getUint32(4, true),
+            tdco_min: data.getUint32(8, true),
+            tdco_max: data.getUint32(12, true),
+            tdcf_min: data.getUint32(16, true),
+            tdcf_max: data.getUint32(20, true),
+            mode: data.getUint32(24, true),
+        };
+    }
+
+    /* GS_USB_BREQ_GET_TDC: what the controller actually uses/reports. */
+    async _getTdc(entry) {
+        const data = await this._ctrlIn(
+            GS_REQ_GET_TDC, entry.hostChannel, 16, entry.interfaceNumber);
+        if (data.byteLength < 16) {
+            throw new Error("short GET_TDC reply");
+        }
+        return {
+            tdcv: data.getUint32(0, true),
+            tdco: data.getUint32(4, true),
+            tdcf: data.getUint32(8, true),
+            mode: data.getUint32(12, true),
+        };
+    }
+
+    /* GS_USB_BREQ_SET_TDC; must be sent before MODE_START. */
+    async _setTdc(entry, tdc) {
+        const data = new Uint8Array(16);
+        const dv = new DataView(data.buffer);
+        dv.setUint32(0, tdc.tdcv >>> 0, true);
+        dv.setUint32(4, tdc.tdco >>> 0, true);
+        dv.setUint32(8, tdc.tdcf >>> 0, true);
+        dv.setUint32(12, tdc.mode >>> 0, true);
+        await this._ctrlOut(GS_REQ_SET_TDC, entry.hostChannel, data, entry.interfaceNumber);
+    }
+
+    /* Host-side TDC policy: Auto is only legal for the M_CAN/CH32 style cells
+     * when the data prescaler is 1 or 2 and the data phase is fast enough for
+     * the loop delay to matter.  The firmware still validates, but failing here
+     * gives a clear message instead of a silent MODE_START failure. */
+    _tdcFromConfig(dataTiming, config) {
+        const caps = this.tdcConst;
+        if (!caps) {
+            throw new Error("device did not report TDC constants");
+        }
+        if (!dataTiming) {
+            throw new Error("TDC needs an FD data timing");
+        }
+
+        if (config.mode === "off") {
+            return { tdcv: 0, tdco: 0, tdcf: 0, mode: GS_TDC_MODE_OFF };
+        }
+        if (config.mode !== "auto") {
+            throw new Error(`unknown TDC mode "${config.mode}"`);
+        }
+        if (!(caps.mode & GS_TDC_MODE_AUTO)) {
+            throw new Error("device does not support TDC auto mode");
+        }
+        if (dataTiming.brp > 2) {
+            throw new Error("TDC auto requires data brp <= 2");
+        }
+
+        const fclk = this.capFd?.fclk_can || this.capClassic?.fclk_can || 0;
+        const bitrate = fclk / (dataTiming.brp * (1 + dataTiming.seg1 + dataTiming.seg2));
+        if (bitrate < 2000000) {
+            throw new Error("TDC auto requires a data bitrate of at least 2 Mbit/s");
+        }
+
+        const computed = (1 + dataTiming.seg1) * dataTiming.brp;
+        let tdco;
+        if (config.tdco !== null && config.tdco !== undefined && config.tdco !== "") {
+            tdco = Number(config.tdco);
+            if (!Number.isInteger(tdco) || tdco < caps.tdco_min || tdco > caps.tdco_max) {
+                throw new Error(`TDC tdco ${tdco} out of range [${caps.tdco_min}-${caps.tdco_max}]`);
+            }
+        } else {
+            tdco = Math.max(caps.tdco_min, Math.min(caps.tdco_max, computed));
+        }
+
+        let tdcf = caps.tdcf_min || 0;
+        if (config.tdcf !== null && config.tdcf !== undefined && config.tdcf !== "") {
+            tdcf = Number(config.tdcf);
+            if (!Number.isInteger(tdcf) || tdcf < caps.tdcf_min || tdcf > caps.tdcf_max) {
+                throw new Error(`TDC tdcf ${tdcf} out of range [${caps.tdcf_min}-${caps.tdcf_max}]`);
+            }
+        }
+
+        return { tdcv: 0, tdco, tdcf, mode: GS_TDC_MODE_AUTO };
+    }
+
+    /* Read back what the controller measured (TDCV) and is using. */
+    async getTdc(channel = this.channel) {
+        const entry = this._channelEntry(channel);
+        if (!entry) {
+            throw new Error(`Channel ${channel} is not available`);
+        }
+        return await this._getTdc(entry);
     }
 
     async _setBitTiming(entry, timing, isFd) {
@@ -1629,7 +1790,14 @@ class GsUsbAdapter extends XCanInterface {
     }
 }
 
-export { GsUsbAdapter, GS_REQ_GET_CAN_RESISTER_ENABLE_STATE, GS_REQ_SET_INTERFACENUMBER_ENDPOINT };
+export {
+    GsUsbAdapter,
+    GS_REQ_GET_TDC_CONST,
+    GS_REQ_SET_TDC,
+    GS_REQ_GET_TDC,
+    GS_TDC_MODE_OFF,
+    GS_TDC_MODE_AUTO,
+};
 
 xcanRegistry.register("gsusb", GsUsbAdapter, {
     displayName: "GS_USB / Candlelight",

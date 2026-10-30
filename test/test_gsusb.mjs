@@ -14,9 +14,11 @@ await import(new URL("../gs_usb.js", import.meta.url).href);
 
 const GS_REQ = {
     HOST_FORMAT: 0, BIT_TIMING: 1, MODE: 2, BT_CONST: 4, DEVICE_CONFIG: 5,
-    BIT_TIMING_FD: 10, BT_CONST_EXT: 11, TERMINATION: 12, LAST_ERROR: 22,
+    BIT_TIMING_FD: 10, BT_CONST_EXT: 11, TERMINATION: 12,
+    GET_TDC_CONST: 17, SET_TDC: 18, GET_TDC: 19, LAST_ERROR: 22,
 };
 const FEATURE = 0x0001 | 0x0010 | 0x0080 | 0x0100 | 0x0400 | 0x0800;
+const FEATURE_TDC = FEATURE | (1 << 17);
 
 class FakeUsbDevice {
     constructor(icount, withDfuInterface = false, clock = 80000000,
@@ -29,6 +31,7 @@ class FakeUsbDevice {
         this.feature = FEATURE;
         this.clock = clock;
         this.dataLimits = dataLimits;
+        this.tdc = { tdcv: 0, tdco: 0, tdcf: 0, mode: 1 };
         this.ctrl = [];
         this.out = [];
         this.rxQueue = new Map();
@@ -81,6 +84,19 @@ class FakeUsbDevice {
         if (setup.request === GS_REQ.LAST_ERROR) {
             return { status: "ok", data: new DataView(new Uint8Array([2]).buffer) };
         }
+        if (setup.request === GS_REQ.GET_TDC_CONST) {
+            const b = new Uint8Array(28); const dv = new DataView(b.buffer);
+            [0, 255, 0, 127, 0, 127, 3].forEach((v, i) => this._put(dv, i * 4, v));
+            return { status: "ok", data: new DataView(b.buffer) };
+        }
+        if (setup.request === GS_REQ.GET_TDC) {
+            const b = new Uint8Array(16); const dv = new DataView(b.buffer);
+            this._put(dv, 0, this.tdc.tdcv);
+            this._put(dv, 4, this.tdc.tdco);
+            this._put(dv, 8, this.tdc.tdcf);
+            this._put(dv, 12, this.tdc.mode);
+            return { status: "ok", data: new DataView(b.buffer) };
+        }
         return { status: "stall", data: null };
     }
 
@@ -89,6 +105,16 @@ class FakeUsbDevice {
             request: setup.request, value: setup.value, index: setup.index,
             data: data ? Uint8Array.from(data) : null,
         });
+        const bytes = data ? Uint8Array.from(data) : null;
+        if (setup.request === GS_REQ.SET_TDC && bytes && bytes.byteLength >= 16) {
+            const dv = new DataView(bytes.buffer);
+            this.tdc = {
+                tdcv: dv.getUint32(0, true),
+                tdco: dv.getUint32(4, true),
+                tdcf: dv.getUint32(8, true),
+                mode: dv.getUint32(12, true),
+            };
+        }
         return { status: "ok" };
     }
 
@@ -262,6 +288,61 @@ console.log("\n== reader lifecycle across disconnect / reconnect ==");
 
     second.rxRunning = false;
     await second.disconnect();
+}
+
+console.log("\n== TDC configuration ==");
+{
+    const dev = new FakeUsbDevice(0, false, 80000000, [1, 32, 2, 16, 16, 1, 32, 1]);
+    dev.feature = FEATURE_TDC;
+    const adapter = new Adapter();
+    adapter.device = dev;
+    await adapter.connect();
+
+    check("TDC constants are read with the capabilities",
+        !!adapter.tdcConst && adapter.tdcConst.mode === 3
+        && adapter.tdcConst.tdco_max === 127,
+        JSON.stringify(adapter.tdcConst));
+
+    dev.ctrl.length = 0;
+    await adapter.initBus({
+        channel: 0, nominalBitrate: 500000, dataBitrate: 2000000, fdMode: true,
+        tdc: { mode: "auto", tdco: null, tdcf: 0 },
+    });
+    const tdcIdx = dev.ctrl.findIndex((c) => c.request === GS_REQ.SET_TDC);
+    const startIdx = dev.ctrl.findIndex((c) => c.request === GS_REQ.MODE
+        && c.data && new DataView(c.data.buffer).getUint32(0, true) === 1);
+    check("SET_TDC is sent before MODE_START", tdcIdx >= 0 && startIdx > tdcIdx,
+        `tdc=${tdcIdx} start=${startIdx}`);
+    check("auto TDCO is the data sample point in clock periods",
+        dev.tdc.mode === 2 && dev.tdc.tdco === 32 && dev.tdc.tdcv === 0,
+        JSON.stringify(dev.tdc));
+
+    const readback = await adapter.getTdc(0);
+    check("GET_TDC reports the programmed/measured values",
+        readback.mode === 2 && readback.tdco === 32, JSON.stringify(readback));
+
+    dev.ctrl.length = 0;
+    await adapter.initBus({
+        channel: 0, nominalBitrate: 500000, dataBitrate: 2000000, fdMode: true,
+        tdc: { mode: "off", tdco: null, tdcf: 0 },
+    });
+    check("OFF disables TDC explicitly",
+        dev.tdc.mode === 1 && dev.tdc.tdco === 0, JSON.stringify(dev.tdc));
+
+    let rejected = "";
+    try {
+        await adapter.initBus({
+            channel: 0, nominalBitrate: 500000, dataBitrate: 1000000, fdMode: true,
+            tdc: { mode: "auto", tdco: null, tdcf: 0 },
+        });
+    } catch (e) {
+        rejected = e.message;
+    }
+    check("auto below 2 Mbit/s is refused before MODE_START",
+        /at least 2 Mbit/.test(rejected), rejected);
+
+    adapter.rxRunning = false;
+    await adapter.disconnect();
 }
 
 console.log("\n== CAN FD timing on a 48 MHz clock (CH32L103) ==");
