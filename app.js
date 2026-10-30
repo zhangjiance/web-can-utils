@@ -3059,6 +3059,7 @@ import "./gs_usb.js";
         `${nCh} channel(s)`,
         `FD ${caps.fd ? "\u2713" : "\u2717"}`,
         `BRS ${caps.brs ? "\u2713" : "\u2717"}`,
+        `TDC ${caps.tdc ? "\u2713" : "\u2717"}`,
         `Listen-Only ${caps.listenOnly ? "\u2713" : "\u2717"}`,
         `Loop-Back ${caps.loopback ? "\u2713" : "\u2717"}`,
         `Termination ${caps.termination ? "\u2713" : "\u2717"}`

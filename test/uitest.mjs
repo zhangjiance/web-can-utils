@@ -225,6 +225,7 @@ await waitFor("device panel", () => $("connectModal").classList.contains("show")
 const devLine = $("deviceInfoPlaceholder").textContent;
 console.log("   ", devLine);
 check("device line shows capability summary", /FD \u2713/.test(devLine) && /Termination \u2713/.test(devLine), devLine);
+check("device line shows TDC support", /TDC \u2713/.test(devLine), devLine);
 check("device line shows the loopback capability", /Loop-Back \u2713/.test(devLine), devLine);
 check("termination column shown", $("thTerm").style.display !== "none", $("thTerm").style.display);
 check("listen / loop / classic columns shown",
