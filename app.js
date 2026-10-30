@@ -14,10 +14,11 @@ import "./gs_usb.js";
    * with the per-channel Classic tick only the nominal phase is programmed - as does any
    * rate reachable through the per-phase ⚙ dialog, which takes explicit values.
    *
-   * Every pair here solves on the 80 MHz CAN clock within the ranges the device
-   * reports (brp 1..512 / seg1 1..256 / seg2 1..128 nominal, brp 1..32 /
-   * seg1 1..32 / seg2 1..16 data) at a sample point of 80 % (81.25 % for the
-   * 5 Mbit/s pairs - 16 time quanta per bit is as close as it gets).
+   * The solver uses the actual device clock (48 MHz on the CH32L103 port,
+   * 80 MHz on HSCanT) and the timing ranges the device reports.  A pair that
+   * cannot hit its bitrate exactly (or only lands on a poor sample point) is
+   * marked unavailable in the list instead of being programmed at a
+   * different rate.
    */
   const PRESET_TO_BITRATE = {
     "500k_2m": { nominal: 500000, data: 2000000 },
@@ -32,6 +33,13 @@ import "./gs_usb.js";
     "1m_5m": { nominal: 1000000, data: 5000000 },
     "1m_8m": { nominal: 1000000, data: 8000000 }
   };
+
+  /* A preset is only offered when the device clock can hit its bitrate
+   * within this tolerance and its sample point is not too far from the 80 %
+   * the solver asks for.  These are quality gates, not gs_usb limits: the
+   * protocol reports timing ranges, not the board's usable data rate. */
+  const PRESET_MAX_BITRATE_ERR = 5e-4;   /* 0.05 % */
+  const PRESET_MAX_SP_ERR = 0.10;        /* 10 percentage points */
 
   const RX_RENDER_THROTTLE_MS = 80;
   const TX_RENDER_THROTTLE_MS = 80;
@@ -1970,15 +1978,26 @@ import "./gs_usb.js";
       timingSelect.style.cssText = "";
       for (const key of Object.keys(PRESET_TO_BITRATE)) {
         const plan = presetPlan(key, fdMode);
+        const reason = presetUnavailableReason(key, fdMode, plan);
         const sp = (plan && plan.nominal)
           ? ` @${(plan.nominal.samplePoint * 100).toFixed(0)}%${plan.data ? `/${(plan.data.samplePoint * 100).toFixed(0)}%` : ""}`
           : "";
         const op = document.createElement("option");
         op.value = key;
-        op.textContent = `${fmtPresetKey(key)}${sp}`;
+        op.textContent = `${fmtPresetKey(key)}${sp}${reason ? " — unavailable" : ""}`;
+        if (reason) {
+          op.disabled = true;
+          op.title = `${fmtPresetKey(key)}: ${reason}`;
+        } else if (plan) {
+          op.title = `${fmtPresetKey(key)}: ${describePlan(plan).replace(/\n/g, "   ")}`;
+        }
         timingSelect.appendChild(op);
       }
       const t = channelTiming(ch);
+      /* A stale preset from another clock falls back to one this device runs. */
+      if (!(t.nominal || t.data) && presetUnavailableReason(t.presetKey, fdMode)) {
+        t.presetKey = defaultPresetKey(fdMode);
+      }
       const parts = timingLabelParts(ch);
       const isCustom = !!(t.nominal || t.data);
 
@@ -2121,6 +2140,13 @@ import "./gs_usb.js";
     const presetKey = t.presetKey || ui.preset.value;
     const bits = PRESET_TO_BITRATE[presetKey] || PRESET_TO_BITRATE[Object.keys(PRESET_TO_BITRATE)[0]];
 
+    if (!t.nominal && !t.data) {
+      const reason = presetUnavailableReason(presetKey, fdMode);
+      if (reason) {
+        throw new Error(`Preset ${fmtPresetKey(presetKey)} unavailable: ${reason}`);
+      }
+    }
+
     const cfg = {
       channel,
       nominalBitrate: bits.nominal,
@@ -2208,13 +2234,27 @@ import "./gs_usb.js";
     };
   }
 
+  /* First preset this device can actually run, so a stale selection from a
+   * different CAN clock never leaks into a fresh connection. */
+  function defaultPresetKey(fdMode) {
+    for (const key of Object.keys(PRESET_TO_BITRATE)) {
+      if (!presetUnavailableReason(key, fdMode)) return key;
+    }
+    return Object.keys(PRESET_TO_BITRATE)[0];
+  }
+
   /* Per-channel timing.  Each phase is either the preset's solved values
    * (`null`) or the user's own registers - no channel-wide "mode" to keep in
    * sync, and customising one phase never touches the other. */
   function channelTiming(ch) {
     if (!state.channelTiming[ch]) {
+      const caps = state.adapter?.deviceInfo?.capabilities || {};
+      const fdMode = !channelSetting(ch).classic && !!caps.fd;
+      const wanted = ui.preset.value;
       state.channelTiming[ch] = {
-        presetKey: ui.preset.value || Object.keys(PRESET_TO_BITRATE)[0],
+        presetKey: (wanted && !presetUnavailableReason(wanted, fdMode))
+          ? wanted
+          : defaultPresetKey(fdMode),
         nominal: null,
         data: null,
         query: {
@@ -2248,13 +2288,13 @@ import "./gs_usb.js";
     if (!adapter || typeof adapter.planPreset !== "function" || !bits) {
       return null;
     }
-    const wrap = (t) => t ? ({
+    const wrap = (t, want) => t ? ({
       origin: "preset",
       values: { brp: t.brp, seg1: t.seg1, seg2: t.seg2, sjw: t.sjw },
       fclk: t.fclk,
       bitrateHz: t.bitrateHz,
       samplePoint: t.samplePoint,
-      err: 0
+      err: want > 0 ? Math.abs(t.bitrateHz - want) / want : 0
     }) : null;
 
     try {
@@ -2263,11 +2303,56 @@ import "./gs_usb.js";
         dataBitrate: bits.data,
         fdMode: fdMode !== false
       });
-      return plan ? { nominal: wrap(plan.nominal), data: wrap(plan.data) } : null;
+      return plan
+        ? { nominal: wrap(plan.nominal, bits.nominal), data: wrap(plan.data, bits.data) }
+        : null;
     } catch (e) {
       console.warn("[web-can-utils] preset preview failed:", e);
       return null;
     }
+  }
+
+  /* Why a preset cannot be offered on the connected device, or "" when it can.
+   * The checks mirror what the solver actually programmed: an inexact bitrate
+   * is a different bus, and a sample point far from the requested 80 % is not
+   * what the user picked.  Before a device is connected there is nothing to
+   * evaluate, so the list stays selectable. */
+  function presetUnavailableReason(presetKey, fdMode, plan) {
+    if (!state.adapter?.canClockHz ||
+        typeof state.adapter.planPreset !== "function") {
+      return "";
+    }
+
+    const bits = PRESET_TO_BITRATE[presetKey];
+    if (!bits) {
+      return "unknown preset";
+    }
+
+    plan = plan || presetPlan(presetKey, fdMode);
+    if (!plan || !plan.nominal) {
+      return "no timing exists on this clock";
+    }
+
+    const offBitrate = (r, want) => r && want > 0 &&
+      Math.abs(r.bitrateHz - want) / want > PRESET_MAX_BITRATE_ERR;
+
+    if (offBitrate(plan.nominal, bits.nominal)) {
+      return `${fmtBitrateShort(plan.nominal.bitrateHz)} instead of ${fmtBitrateShort(bits.nominal)}`;
+    }
+    if (Math.abs(plan.nominal.samplePoint - 0.8) > PRESET_MAX_SP_ERR) {
+      return `sample point ${fmtSamplePoint(plan.nominal.samplePoint)} too far from 80%`;
+    }
+
+    if (plan.data) {
+      if (offBitrate(plan.data, bits.data)) {
+        return `data ${fmtBitrateShort(plan.data.bitrateHz)} instead of ${fmtBitrateShort(bits.data)}`;
+      }
+      if (Math.abs(plan.data.samplePoint - 0.8) > PRESET_MAX_SP_ERR) {
+        return `data sample point ${fmtSamplePoint(plan.data.samplePoint)} too far from 80%`;
+      }
+    }
+
+    return "";
   }
 
   /*
@@ -2415,7 +2500,10 @@ import "./gs_usb.js";
     return false;
   }
 
-  /* Preset labels carry the sample point they resolve to. */
+  /* Preset labels carry the sample point they resolve to.  Presets this
+   * device cannot represent are kept visible but disabled: removing them would
+   * make the same list wrong on another adapter (an 80 MHz CAN clock can run
+   * 5M/8M, a 48 MHz one cannot). */
   function renderPresetOptions(select, selectedKey) {
     if (!select) return;
     const keep = selectedKey || select.value;
@@ -2423,17 +2511,32 @@ import "./gs_usb.js";
     const fdMode = anyChannelFd();
     for (const key of Object.keys(PRESET_TO_BITRATE)) {
       const plan = presetPlan(key, fdMode);
+      const reason = presetUnavailableReason(key, fdMode, plan);
       const sp = (plan && plan.nominal)
         ? ` — SP ${fmtSamplePoint(plan.nominal.samplePoint)}${plan.data ? ` / ${fmtSamplePoint(plan.data.samplePoint)}` : ""}`
         : "";
       const op = document.createElement("option");
       op.value = key;
-      op.textContent = `${fmtPresetKey(key)}${sp}`;
-      if (plan) op.title = `${fmtPresetKey(key)}: ${describePlan(plan).replace(/\n/g, "   ")}`;
+      op.textContent = `${fmtPresetKey(key)}${sp}${reason ? " — unavailable" : ""}`;
+      if (reason) {
+        op.disabled = true;
+        op.title = `${fmtPresetKey(key)}: ${reason}`;
+      } else if (plan) {
+        op.title = `${fmtPresetKey(key)}: ${describePlan(plan).replace(/\n/g, "   ")}`;
+      }
       select.appendChild(op);
     }
-    if (keep && Array.from(select.options).some((o) => o.value === keep)) {
+
+    /* Keep the current selection when it survived; otherwise land on the
+     * first preset this device can actually run. */
+    const keepOption = keep
+      ? Array.from(select.options).find((o) => o.value === keep && !o.disabled)
+      : null;
+    const firstOption = Array.from(select.options).find((o) => !o.disabled);
+    if (keepOption) {
       select.value = keep;
+    } else if (firstOption) {
+      select.value = firstOption.value;
     }
   }
 

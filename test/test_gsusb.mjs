@@ -19,13 +19,16 @@ const GS_REQ = {
 const FEATURE = 0x0001 | 0x0010 | 0x0080 | 0x0100 | 0x0400 | 0x0800;
 
 class FakeUsbDevice {
-    constructor(icount, withDfuInterface = false) {
+    constructor(icount, withDfuInterface = false, clock = 80000000,
+                dataLimits = [1, 32, 2, 16, 16, 1, 32, 1]) {
         this.vendorId = 0x1d50;
         this.productId = 0x606f;
         this.serialNumber = "TEST";
         this.opened = false;
         this.icount = icount;
         this.feature = FEATURE;
+        this.clock = clock;
+        this.dataLimits = dataLimits;
         this.ctrl = [];
         this.out = [];
         this.rxQueue = new Map();
@@ -68,11 +71,10 @@ class FakeUsbDevice {
             const len = setup.request === GS_REQ.BT_CONST ? 40 : 72;
             const b = new Uint8Array(len); const dv = new DataView(b.buffer);
             const lim = [2, 256, 2, 128, 128, 1, 512, 1];
-            this._put(dv, 0, this.feature); this._put(dv, 4, 80000000);
+            this._put(dv, 0, this.feature); this._put(dv, 4, this.clock);
             lim.forEach((v, i) => this._put(dv, 8 + 4 * i, v));
             if (len === 72) {
-                const dlim = [1, 32, 2, 16, 16, 1, 32, 1];
-                dlim.forEach((v, i) => this._put(dv, 40 + 4 * i, v));
+                this.dataLimits.forEach((v, i) => this._put(dv, 40 + 4 * i, v));
             }
             return { status: "ok", data: new DataView(b.buffer) };
         }
@@ -260,6 +262,30 @@ console.log("\n== reader lifecycle across disconnect / reconnect ==");
 
     second.rxRunning = false;
     await second.disconnect();
+}
+
+console.log("\n== CAN FD timing on a 48 MHz clock (CH32L103) ==");
+{
+    const dev = new FakeUsbDevice(0, false, 48000000, [1, 16, 1, 8, 4, 1, 32, 1]);
+    const adapter = new Adapter();
+    adapter.device = dev;
+    await adapter.connect();
+
+    const p1 = adapter.planPreset({ nominalBitrate: 500000, dataBitrate: 1000000, fdMode: true });
+    check("1M data: brp 3 / 16 tq / 75%",
+        p1.data.brp === 3 && p1.data.seg1 === 11 && p1.data.seg2 === 4
+        && Math.abs(p1.data.samplePoint - 0.75) < 1e-9,
+        JSON.stringify(p1.data));
+
+    const p5 = adapter.planPreset({ nominalBitrate: 500000, dataBitrate: 5000000, fdMode: true });
+    check("5M data cannot be hit exactly at 48 MHz", p5.data.bitrateHz === 4800000, String(p5.data.bitrateHz));
+
+    const p8 = adapter.planPreset({ nominalBitrate: 1000000, dataBitrate: 8000000, fdMode: true });
+    check("8M data only reaches a 50% sample point", Math.abs(p8.data.samplePoint - 0.5) < 1e-9,
+        String(p8.data.samplePoint));
+
+    adapter.rxRunning = false;
+    await adapter.disconnect();
 }
 
 console.log(failures === 0 ? "\nGS_USB CHECKS PASSED" : `\n${failures} GS_USB CHECK(S) FAILED`);
