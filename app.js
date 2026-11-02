@@ -916,9 +916,25 @@ import "./gs_usb.js";
         cells.push(td);
       }
       node = { tr, cells, dataCell: cells[4], byteSpans: [] };
+      /* the data column keeps this class for its whole life: writing it on
+       * every repaint needlessly invalidated style for the whole table */
+      node.dataCell.className = "data-cell";
       state.rxRows.set(key, node);
     }
     return node;
+  }
+
+  /* Write a cell only when its text actually changed.  With table-layout:auto
+   * any text change makes the browser re-measure the whole table, and the RX
+   * table is repainted ~12x/s; the idle rows must not touch the DOM at all. */
+  function setCellText(el, value) {
+    const text = value === null || value === undefined ? "" : String(value);
+    if (el._text === text) {
+      return false;
+    }
+    el._text = text;
+    el.textContent = text;
+    return true;
   }
 
   const FLASH_BYTE_MS = 900;
@@ -952,6 +968,14 @@ import "./gs_usb.js";
     if (!el) {
       return;
     }
+
+    /* An element that is still fading already reads as "just changed".
+     * Stacking another Animation on every repaint only adds style work. */
+    const now = performance.now();
+    if (el._flashUntil && now < el._flashUntil) {
+      return;
+    }
+    el._flashUntil = now + durationMs;
 
     try {
       const flash = flashColors();
@@ -1012,6 +1036,8 @@ import "./gs_usb.js";
       flag.textContent = "ESI";
       cell.appendChild(flag);
     }
+    /* the cell now holds child nodes, not the text setCellText() remembers */
+    cell._text = undefined;
   }
 
   function renderRxSummary() {
@@ -1025,16 +1051,16 @@ import "./gs_usb.js";
       const node = rxRowNode(r.key);
       const [chCell, idCell, typeCell, lenCell, dataCell, cycleCell, countCell] = node.cells;
 
-      chCell.textContent = channelLabel(r.channel | 0);
-      idCell.textContent = isStatus ? "ERR" : `0x${r.id.toString(16).toUpperCase()}`;
+      setCellText(chCell, channelLabel(r.channel | 0));
+      setCellText(idCell, isStatus ? "ERR" : `0x${r.id.toString(16).toUpperCase()}`);
       if (isStatus) {
-        typeCell.textContent = r.type;
+        setCellText(typeCell, r.type);
       } else {
         renderRxType(typeCell, r.type);
       }
-      lenCell.textContent = isStatus ? "\u00b7" : r.length;
-      cycleCell.textContent = r.cycle;
-      countCell.textContent = r.count;
+      setCellText(lenCell, isStatus ? "\u00b7" : r.length);
+      setCellText(cycleCell, r.cycle);
+      setCellText(countCell, r.count);
 
       /* the frame counter changes on every frame: flash it on every repaint */
       if (node.lastCount !== undefined && node.lastCount !== r.count) {
@@ -1051,13 +1077,28 @@ import "./gs_usb.js";
        * the row's identity, and ESI is handled by its fixed slot above - a bit
        * that flips every other frame would otherwise glow without pause. */
 
-      dataCell.className = "data-cell";
-      dataCell.title = isStatus ? (r.hint || r.data) : r.data;
+      const title = isStatus ? (r.hint || r.data) : r.data;
+      if (dataCell.title !== title) {
+        dataCell.title = title;
+      }
 
       if (isStatus) {
-        node.byteSpans = [];
-        dataCell.textContent = r.data;
+        /* the data column is plain text on an ERR row, byte spans otherwise */
+        if (node.renderMode !== "status") {
+          node.renderMode = "status";
+          node.byteSpans = [];
+          dataCell._text = undefined;    /* force a fresh text write */
+        }
+        setCellText(dataCell, r.data);
         continue;
+      }
+
+      if (node.renderMode !== "data") {
+        node.renderMode = "data";
+        dataCell.textContent = "";       /* drop the ERR text node, if any */
+        dataCell._text = undefined;      /* the cell is spans now, not text */
+        node.byteSpans = [];
+        node.lastBytes = [];
       }
 
       /* one span per byte; a byte only flashes when it actually differs from
@@ -1074,8 +1115,16 @@ import "./gs_usb.js";
       for (let i = 0; i < node.byteSpans.length; i++) {
         const span = node.byteSpans[i];
         const visible = i < bytes.length;
-        span.style.display = visible ? "" : "none";
-        span.textContent = visible ? (bytes[i] & 0xff).toString(16).padStart(2, "0").toUpperCase() : "";
+        const shown = visible ? "" : "none";
+        if (span._shown !== shown) {
+          span._shown = shown;
+          span.style.display = shown;
+        }
+        const hex = visible ? (bytes[i] & 0xff).toString(16).padStart(2, "0").toUpperCase() : "";
+        if (span._hex !== hex) {
+          span._hex = hex;
+          span.textContent = hex;
+        }
         if (visible && lastBytes[i] !== undefined && lastBytes[i] !== bytes[i]) {
           flashToken(span, FLASH_BYTE_MS);
         }
@@ -2980,11 +3029,29 @@ import "./gs_usb.js";
     }
   }
 
+  /* A failed connect used to be swallowed by the click handler's empty
+   * .catch(), so the button appeared to do nothing.  Always say why. */
+  function reportConnectFailure(err) {
+    console.error(err);
+    const reason = err?.message || String(err);
+    setStateText(`Connect failed: ${reason}`, "danger");
+    if (state.adapter) {
+      try { state.adapter.disconnect(); } catch (_) {}
+      state.adapter = null;
+    }
+    state.connected = false;
+    syncConnectButton();
+    alert(`Connect failed: ${reason}`);
+  }
+
   /* Connect: pick device → query info → show bus config modal */
   async function doConnect() {
     try {
       const protocol = ui.protocolSelect.value;
-      if (!protocol) return;
+      if (!protocol) {
+        setStateText("No protocol selected", "danger");
+        return;
+      }
 
       const adapter = xcanRegistry.create(protocol);
       if (!adapter) throw new Error("Protocol not found");
@@ -3083,14 +3150,7 @@ import "./gs_usb.js";
       /* 4. Show bus config modal */
       showModal("connect");
     } catch (err) {
-      console.error(err);
-      setStateText("Connect failed", "danger");
-      if (state.adapter) {
-        try { state.adapter.disconnect(); } catch (_) {}
-        state.adapter = null;
-      }
-      state.connected = false;
-      syncConnectButton();
+      reportConnectFailure(err);
     }
   }
 
@@ -3219,6 +3279,24 @@ import "./gs_usb.js";
     setStateText("Disconnected", "");
     syncConnectButton();
     resetDeviceChips();
+  }
+
+  /* Unplugging the adapter must land in the same state as Disconnect: without
+   * this the UI keeps claiming a bus that no longer exists.  WebUSB reports it
+   * through navigator.usb; ignore any device the page is not using. */
+  async function handleDeviceLost(device) {
+    const adapter = state.adapter;
+    if (!adapter) return;
+    if (device && adapter.device && device !== adapter.device) return;
+
+    const label = adapter.deviceInfo?.name
+      || (adapter.device
+        ? `0x${adapter.device.vendorId.toString(16)}:0x${adapter.device.productId.toString(16)}`
+        : "adapter");
+
+    await disconnectAll();
+    renderTxTasks();
+    setStateText(`Device disconnected: ${label}`, "danger");
   }
 
   /* Stop the bus: everything the toolbar/panel Start set up. */
@@ -3495,6 +3573,14 @@ import "./gs_usb.js";
 
   function bindEvents() {
     buildTxByteBoxes();
+
+    if (typeof navigator !== "undefined" && navigator.usb
+        && typeof navigator.usb.addEventListener === "function") {
+      navigator.usb.addEventListener("disconnect", (ev) => {
+        handleDeviceLost(ev?.device).catch((err) => console.error(err));
+      });
+    }
+
     /* typing a new ID should replace the old one, not append to it */
     ui.txId.addEventListener("focus", () => ui.txId.select());
     ui.txLen.addEventListener("change", updateTxByteBoxDims);
@@ -3546,7 +3632,7 @@ import "./gs_usb.js";
       if (state.connected) {
         openDevicePanel();
       } else {
-        doConnect().catch(() => {});
+        doConnect().catch((err) => reportConnectFailure(err));
       }
     });
 

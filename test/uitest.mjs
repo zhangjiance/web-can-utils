@@ -1052,6 +1052,9 @@ check("the length is edited inline and the data follows",
 
 /* the edited values are what actually goes out */
 device.out.length = 0;
+/* flashToken() drops a new animation while the previous one is still fading
+ * (FLASH_CELL_MS = 500): let the send above finish its fade first. */
+await sleep(520);
 flashes.length = 0;
 txRowAt(0).querySelector('button[data-act="send"]').click();
 await waitFor("frame after inline edit", () => device.out.length > 0, 1000);
